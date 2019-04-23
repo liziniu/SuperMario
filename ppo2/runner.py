@@ -1,5 +1,27 @@
 import numpy as np
 from baselines.common.runners import AbstractEnvRunner
+import os
+import pickle
+from baselines import logger
+
+
+class Recorder:
+    def __init__(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.path = path
+        self.file = open(os.path.join(path, "data.pkl"), "wb")
+        self.file.close()
+        self.memory = []
+
+    def store(self, data):
+        self.memory.append(data)
+
+    def dump(self):
+        with open(os.path.join(self.path, "data.pkl"), "ab+") as f:
+            pickle.dump(self.memory, f, -1)
+        self.memory = []
+
 
 class Runner(AbstractEnvRunner):
     """
@@ -10,12 +32,15 @@ class Runner(AbstractEnvRunner):
     run():
     - Make a mini batch
     """
-    def __init__(self, *, env, model, nsteps, gamma, lam):
+    def __init__(self, *, env, model, nsteps, gamma, lam, save_path):
         super().__init__(env=env, model=model, nsteps=nsteps)
         # Lambda used in GAE (General Advantage Estimation)
         self.lam = lam
         # Discount rate
         self.gamma = gamma
+        self.recorder = Recorder(save_path)
+        self.episode = np.zeros(self.nenv)
+        self.timestamp = np.zeros(self.nenv)
 
     def run(self):
         # Here, we init the lists that will contain the mb of experiences
@@ -26,6 +51,7 @@ class Runner(AbstractEnvRunner):
         for _ in range(self.nsteps):
             # Given observations, get action value and neglopacs
             # We already have self.obs because Runner superclass run self.obs[:] = env.reset() on init
+            obs_tmp = self.obs.copy()
             actions, values, self.states, neglogpacs = self.model.step(self.obs, S=self.states, M=self.dones)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
@@ -36,10 +62,24 @@ class Runner(AbstractEnvRunner):
             # Take actions in env and look the results
             # Infos contains a ton of useful informations
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+            self.timestamp += 1
             # todo: add x,y,obs to pkl file.
-            for info in infos:
+            for env_idx, info in enumerate(infos):
                 maybeepinfo = info.get('episode')
-                if maybeepinfo: epinfos.append(maybeepinfo)
+                data = dict(
+                    episode=self.episode[env_idx],
+                    timestamp=self.timestamp[env_idx],
+                    x_pos=info["x_pos"],
+                    y_pos=info["y_pos"],
+                    obs=obs_tmp[env_idx],
+                    next_obs=self.obs[env_idx]
+                )
+                self.recorder.store(data)
+                if maybeepinfo:
+                    epinfos.append(maybeepinfo)
+                    self.episode[env_idx] += 1
+                    self.timestamp[env_idx] = 0
+                    self.recorder.dump()
             mb_rewards.append(rewards)
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)

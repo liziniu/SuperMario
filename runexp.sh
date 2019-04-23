@@ -4,4 +4,4 @@ python run.py \
     --network cnn \
     --num_env 1 \
     --reward_scale 0.0667 \
-    --save_video_interval 10
+    --save_video_interval 0

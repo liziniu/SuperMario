@@ -13,7 +13,7 @@ from cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_e
 from baselines.common.tf_util import get_session
 from baselines import logger
 from importlib import import_module
-
+import datetime
 
 try:
     from mpi4py import MPI
@@ -61,6 +61,7 @@ def train(args, extra_args):
     learn = get_learn_function(args.alg)
     alg_kwargs = get_learn_function_defaults(args.alg, env_type)
     alg_kwargs.update(extra_args)
+    alg_kwargs.pop("save_path")
 
     env = build_env(args)
     if args.save_video_interval != 0:
@@ -78,6 +79,7 @@ def train(args, extra_args):
         env=env,
         seed=seed,
         total_timesteps=total_timesteps,
+        save_path=extra_args["save_path"],
         **alg_kwargs
     )
 
@@ -202,7 +204,8 @@ def main(args):
     args, unknown_args = arg_parser.parse_known_args(args)
     extra_args = parse_cmdline_kwargs(unknown_args)
 
-    path = "logs"
+    path = osp.join("logs", datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S-%f".format(args.env)))
+    extra_args["save_path"] = path
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
         rank = 0
         logger.configure(dir=path)

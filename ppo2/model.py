@@ -154,3 +154,10 @@ class Model(object):
             td_map
         )[:-1]
 
+
+    def save(self):
+        pass
+
+    def load(self):
+        pass
+
