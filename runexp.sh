@@ -4,5 +4,5 @@ python run.py \
     --network cnn \
     --num_env 1 \
     --reward_scale 0.0667 \
-    --save_video_interval 0
+    --save_video_interval 0 \
     --num_timesteps 1e8

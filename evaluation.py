@@ -194,9 +194,9 @@ def main(args):
 
     set_global_seeds(args.seed)
 
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    sess = tf.Session(config=config)
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
+    config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
+    sess = tf.Session(config=config, )
     env = build_env(args)
 
     model = Model(
