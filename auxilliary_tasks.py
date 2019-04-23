@@ -50,7 +50,7 @@ class InverseDynamics(FeatureExtractor):
 
             x = fc(x, "fc_1", nh=hidsize)
             x = activ(x)
-            x = fc(x, "fc_2", nh=self.ac.get_shape().as_list()[-1])
+            x = fc(x, "fc_2", nh=hidsize)
             idfpd = self.pdtype.pdfromflat(x)
             return idfpd.neglogp(self.ac)
 
@@ -68,12 +68,19 @@ class RandomNetworkDistillation(FeatureExtractor):
             self.feature_target = cnn(self.obs, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="target", reuse=False)
 
     def get_features(self, x, reuse):
+        if not hasattr(self, "feature_target"):
+            with tf.variable_scope("target", reuse=False):
+                self.feature_target = cnn(self.obs, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="target",
+                                          reuse=False)
         with tf.variable_scope("prediction", reuse=reuse):
             feature_predict = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="prediction", reuse=reuse)
         return feature_predict
 
     def get_loss(self):
         return tf.reduce_mean(tf.square(tf.stop_gradient(self.feature_target) - self.feature))
+
+    def get_novelty(self):
+        return tf.reduce_mean(tf.square(self.feature_target - self.feature), axis=-1)
 
 
 class RandomFeature(FeatureExtractor):

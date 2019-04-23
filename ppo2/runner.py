@@ -32,7 +32,7 @@ class Runner(AbstractEnvRunner):
     run():
     - Make a mini batch
     """
-    def __init__(self, *, env, model, nsteps, gamma, lam, save_path):
+    def __init__(self, *, env, model, nsteps, gamma, lam, save_path, store_data):
         super().__init__(env=env, model=model, nsteps=nsteps)
         # Lambda used in GAE (General Advantage Estimation)
         self.lam = lam
@@ -41,6 +41,7 @@ class Runner(AbstractEnvRunner):
         self.recorder = Recorder(save_path)
         self.episode = np.zeros(self.nenv)
         self.timestamp = np.zeros(self.nenv)
+        self.store_data = store_data
 
     def run(self):
         # Here, we init the lists that will contain the mb of experiences
@@ -66,20 +67,24 @@ class Runner(AbstractEnvRunner):
             # todo: add x,y,obs to pkl file.
             for env_idx, info in enumerate(infos):
                 maybeepinfo = info.get('episode')
-                data = dict(
-                    episode=self.episode[env_idx],
-                    timestamp=self.timestamp[env_idx],
-                    x_pos=info["x_pos"],
-                    y_pos=info["y_pos"],
-                    obs=obs_tmp[env_idx],
-                    next_obs=self.obs[env_idx]
-                )
-                self.recorder.store(data)
+                if self.store_data:
+                    data = dict(
+                        episode=self.episode[env_idx],
+                        timestamp=self.timestamp[env_idx],
+                        x_pos=info["x_pos"],
+                        y_pos=info["y_pos"],
+                        obs=obs_tmp[env_idx],
+                        next_obs=self.obs[env_idx],
+                        act=actions[env_idx],
+                        value=values[env_idx]
+                    )
+                    self.recorder.store(data)
                 if maybeepinfo:
                     epinfos.append(maybeepinfo)
-                    self.episode[env_idx] += 1
-                    self.timestamp[env_idx] = 0
-                    self.recorder.dump()
+                    if self.store_data:
+                        self.episode[env_idx] += 1
+                        self.timestamp[env_idx] = 0
+                        self.recorder.dump()
             mb_rewards.append(rewards)
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)

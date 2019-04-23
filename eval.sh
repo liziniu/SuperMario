@@ -1,8 +1,8 @@
 python evaluation.py \
-    --rollout_size 256 \
-    --batch_size 64 \
-    --nb_opt 4 \
-    --load_path logs \
+    --load_path logs/2019-04-23-17-30-28-887620 \
+    --env SuperMarioBros-v0 \
+    --env_type atari \
+    --num_env 1 \
+    --norm \
     --plot \
     --online \
-    --norm \

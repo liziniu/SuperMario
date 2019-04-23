@@ -80,6 +80,7 @@ def train(args, extra_args):
         seed=seed,
         total_timesteps=total_timesteps,
         save_path=extra_args["save_path"],
+        store_data=args.store_data,
         **alg_kwargs
     )
 
