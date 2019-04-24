@@ -47,7 +47,7 @@ class Dynamics(object):
             return tf.concat([x, ac], axis=-1)
 
         with tf.variable_scope(self.scope):
-            hidsize = 64
+            hidsize = self.feat_dim
             activ = tf.nn.leaky_relu
             x = fc(add_ac(self.feature), nh=hidsize, scope="fc_1")
             if activ is not None:

@@ -1,6 +1,7 @@
 import tensorflow as tf
 from baselines.common.distributions import make_pdtype
 from util import cnn, fc
+import numpy as np
 
 
 class FeatureExtractor(object):
@@ -43,15 +44,14 @@ class InverseDynamics(FeatureExtractor):
         return feature
 
     def get_loss(self):
-        activ = tf.nn.leaky_relu
-        hidsize= 64
+        activ = tf.nn.relu
+        hidsize = 512
         with tf.variable_scope(self.scope):
             x = tf.concat([self.feature, self.next_feature], -1)
 
             x = fc(x, "fc_1", nh=hidsize)
             x = activ(x)
-            x = fc(x, "fc_2", nh=hidsize)
-            idfpd = self.pdtype.pdfromflat(x)
+            idfpd = self.pdtype.pdfromflat(x)     # this will incur a fc to match dim
             return idfpd.neglogp(self.ac)
 
 
@@ -73,7 +73,13 @@ class RandomNetworkDistillation(FeatureExtractor):
                 self.feature_target = cnn(self.obs, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="target",
                                           reuse=False)
         with tf.variable_scope("prediction", reuse=reuse):
-            feature_predict = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="prediction", reuse=reuse)
+            x = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="prediction", reuse=reuse)
+            # additional layers
+            activ = tf.nn.leaky_relu
+            nh = 512
+            x = activ(fc(x, scope="addition_fc_1", nh=nh, init_scale=np.sqrt(2)))
+            x = activ(fc(x, scope="addition_fc_2", nh=nh, init_scale=np.sqrt(2)))
+            feature_predict = fc(x, scope="feat_output", nh=self.feat_dim, init_scale=np.sqrt(2))
         return feature_predict
 
     def get_loss(self):

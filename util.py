@@ -49,7 +49,8 @@ def fc(x, scope, nh, *, init_scale=1.0, init_bias=0.0, reuse=False):
         w = tf.get_variable("w", [nin, nh], initializer=ortho_init(init_scale))
         b = tf.get_variable("b", [nh], initializer=tf.constant_initializer(init_bias))
         return tf.matmul(x, w)+b
-    
+
+
 def cnn(unscaled_images, scope, activ=None, nfeat=None, reuse=False):
     scaled_images = tf.cast(unscaled_images, tf.float32) / 255.
     activ = activ or tf.nn.leaky_relu
@@ -58,4 +59,4 @@ def cnn(unscaled_images, scope, activ=None, nfeat=None, reuse=False):
     h2 = activ(conv(h, scope+'c2', nf=64, rf=4, stride=2, init_scale=np.sqrt(2), reuse=reuse))
     h3 = activ(conv(h2, scope+'c3', nf=64, rf=3, stride=1, init_scale=np.sqrt(2), reuse=reuse))
     h3 = conv_to_fc(h3)
-    return activ(fc(h3, scope+'fc1', nh=nfeat, init_scale=np.sqrt(2)))
+    return fc(h3, scope+'fc1', nh=nfeat, init_scale=np.sqrt(2))

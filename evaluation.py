@@ -144,7 +144,7 @@ class Model:
             "dynamic_loss": np.asarray(episode_dynamic_loss)
         })
         df.to_csv(os.path.join(save_path, "training.csv"))
-        with open(os.path.join("plot_data.csv"), "wb") as f:
+        with open(os.path.join(save_path, "plot_data.pkl"), "wb") as f:
             pickle.dump(plot_data, f, -1)
 
     def dict2arr(self, data, keys):
@@ -212,8 +212,8 @@ def main(args):
     save_path = "{}/{}-{}-{}".format(
         args.load_path,
         args.aux_task,
+        "online" if args.online else "offline",
         args.env,
-        args.seed,
     ).replace("logs", "plots")
 
     if not os.path.exists(save_path):
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_size", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--nb_opt", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=5e-4)
 
     parser.add_argument("--online", action="store_true", default=False)
     parser.add_argument("--plot", action="store_true", default=False)
@@ -246,7 +246,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--aux_task", type=str, default="rnd", choices=["rnd", "rf", "idf"])
     parser.add_argument("--feat_dim", type=int, default=512)
-    parser.add_argument("--dyna_dim", type=int, default=64)
+    parser.add_argument("--dyna_dim", type=int, default=512)
 
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--load_path", type=str, default="logs")
