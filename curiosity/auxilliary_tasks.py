@@ -1,7 +1,8 @@
+import numpy as np
 import tensorflow as tf
 from baselines.common.distributions import make_pdtype
-from util import cnn, fc
-import numpy as np
+
+from common.util import cnn, fc
 
 
 class FeatureExtractor(object):

@@ -1,19 +1,20 @@
-import sys
-import re
+import datetime
 import multiprocessing
 import os.path as osp
-import gym
+import re
+import sys
 from collections import defaultdict
-import tensorflow as tf
-import numpy as np
+from importlib import import_module
 
+import gym
+import numpy as np
+import tensorflow as tf
+from baselines import logger
+from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
-from cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
-from baselines.common.tf_util import get_session
-from baselines import logger
-from importlib import import_module
-import datetime
+
+from common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
 
 try:
     from mpi4py import MPI

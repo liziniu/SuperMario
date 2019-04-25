@@ -1,20 +1,17 @@
-import tensorflow as tf
-import numpy as np
 import matplotlib
+import numpy as np
+import tensorflow as tf
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize, LogNorm
-import seaborn as sns
 import pandas as pd
 import os
 import argparse
 import pickle
 import json
-from cmd_util import set_global_seeds, make_vec_env
-from auxilliary_tasks import InverseDynamics, RandomFeature, RandomNetworkDistillation
-from dynamics import Dynamics
+from common.cmd_util import set_global_seeds
+from curiosity.auxilliary_tasks import InverseDynamics, RandomFeature, RandomNetworkDistillation
+from curiosity.dynamics import Dynamics
 from run import build_env
-import datetime
 
 
 class Model:

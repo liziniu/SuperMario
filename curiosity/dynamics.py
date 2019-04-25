@@ -1,8 +1,9 @@
+import numpy as np
 import tensorflow as tf
 from gym import spaces
-from util import fc
-from auxilliary_tasks import RandomFeature, InverseDynamics, RandomNetworkDistillation
-import numpy as np
+
+from common.util import fc
+from curiosity.auxilliary_tasks import RandomFeature, InverseDynamics, RandomNetworkDistillation
 
 
 class Dynamics(object):
