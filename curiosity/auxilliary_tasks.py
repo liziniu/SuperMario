@@ -6,9 +6,8 @@ from common.util import cnn, fc
 
 
 class FeatureExtractor(object):
-    def __init__(self, sess, env, feat_dim=None, scope='feature_extractor'):
+    def __init__(self,  env, feat_dim, scope):
         self.scope = scope
-        self.sess = sess
         self.feat_dim = feat_dim
         self.ob_space = env.observation_space
         self.ac_space = env.action_space
@@ -31,55 +30,46 @@ class FeatureExtractor(object):
 
 
 class InverseDynamics(FeatureExtractor):
-    def __init__(self, sess, env, feat_dim=None, scope="inverse_dynamics"):
+    def __init__(self, env, feat_dim, scope="inverse_dynamics"):
         super(InverseDynamics, self).__init__(
-            sess=sess,
             env=env,
             scope=scope,
             feat_dim=feat_dim,
         )
 
     def get_features(self, x, reuse):
-        with tf.variable_scope(self.scope, reuse=reuse):
-            feature = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="feature", reuse=reuse)
+        feature = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="", reuse=reuse)
         return feature
 
     def get_loss(self):
         activ = tf.nn.relu
         hidsize = 512
-        with tf.variable_scope(self.scope):
-            x = tf.concat([self.feature, self.next_feature], -1)
+        x = tf.concat([self.feature, self.next_feature], -1)
 
-            x = fc(x, "fc_1", nh=hidsize)
-            x = activ(x)
-            idfpd = self.pdtype.pdfromflat(x)     # this will incur a fc to match dim
-            return idfpd.neglogp(self.ac)
+        x = fc(x, "pred_act_fc", nh=hidsize)
+        x = activ(x)
+        idfpd = self.pdtype.pdfromflat(x)     # this will incur a fc to match dim
+        return idfpd.neglogp(self.ac)
 
 
 class RandomNetworkDistillation(FeatureExtractor):
-    def __init__(self, sess, env, feat_dim=None, scope="random_network_distillation"):
+    def __init__(self, env, feat_dim, scope="random_network_distillation"):
         super(RandomNetworkDistillation, self).__init__(
-            sess=sess,
             env=env,
             scope=scope,
             feat_dim=feat_dim,
         )
 
-        with tf.variable_scope("target", reuse=False):
-            self.feature_target = cnn(self.obs, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="target", reuse=False)
-
     def get_features(self, x, reuse):
         if not hasattr(self, "feature_target"):
-            with tf.variable_scope("target", reuse=False):
-                self.feature_target = cnn(self.obs, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="target",
-                                          reuse=False)
+            self.feature_target = cnn(self.obs, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="target", reuse=False)
         with tf.variable_scope("prediction", reuse=reuse):
-            x = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="prediction", reuse=reuse)
+            x = cnn(x, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, scope="", reuse=reuse)
             # additional layers
             activ = tf.nn.leaky_relu
             nh = 512
-            x = activ(fc(x, scope="addition_fc_1", nh=nh, init_scale=np.sqrt(2)))
-            x = activ(fc(x, scope="addition_fc_2", nh=nh, init_scale=np.sqrt(2)))
+            x = activ(fc(x, scope="fc_1", nh=nh, init_scale=np.sqrt(2)))
+            x = activ(fc(x, scope="fc_2", nh=nh, init_scale=np.sqrt(2)))
             feature_predict = fc(x, scope="feat_output", nh=self.feat_dim, init_scale=np.sqrt(2))
         return feature_predict
 
@@ -91,17 +81,15 @@ class RandomNetworkDistillation(FeatureExtractor):
 
 
 class RandomFeature(FeatureExtractor):
-    def __init__(self, sess, env, feat_dim=None, scope="random_feature"):
+    def __init__(self, env, feat_dim, scope="random_feature"):
         super(RandomFeature, self).__init__(
-            sess=sess,
             env=env,
             scope=scope,
             feat_dim=feat_dim,
         )
 
     def get_features(self, x, reuse):
-        with tf.variable_scope(self.scope, reuse=reuse):
-            feature = cnn(x, scope=self.scope, activ=tf.nn.leaky_relu, nfeat=self.feat_dim, reuse=reuse)
+        feature = cnn(x, scope="", activ=tf.nn.leaky_relu, nfeat=self.feat_dim, reuse=reuse)
         return feature
 
     def get_loss(self):
