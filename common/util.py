@@ -64,6 +64,16 @@ def cnn(unscaled_images, scope, activ=None, nfeat=None, reuse=False):
     return fc(h3, scope+'_conv_to_fc', nh=nfeat, init_scale=np.sqrt(2), reuse=reuse)
 
 
+def gradient_add(g1, g2, param):
+    assert (not (g1 is None and g2 is None)), param.name
+    if g1 is None:
+        return g2
+    elif g2 is None:
+        return g1
+    else:
+        return g1 + g2
+
+
 class DataRecorder:
     def __init__(self, path):
         if not os.path.exists(path):

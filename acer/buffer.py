@@ -25,7 +25,7 @@ class Buffer(object):
         # Memory
         self.enc_obs = None
         self.actions = None
-        self.rewards = None
+        self.ext_rewards = None
         self.mus = None
         self.dones = None
         self.masks = None
@@ -51,7 +51,7 @@ class Buffer(object):
         return _stack_obs(enc_obs, dones,
                           nsteps=self.nsteps)
 
-    def put(self, enc_obs, actions, rewards, mus, dones, masks, goal_obs):
+    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs):
         # enc_obs [nenv, (nsteps + nstack), nh, nw, nc]
         # actions, rewards, dones [nenv, nsteps]
         # mus [nenv, nsteps, nact]
@@ -59,7 +59,7 @@ class Buffer(object):
         if self.enc_obs is None:
             self.enc_obs = np.empty([self.size] + list(enc_obs.shape), dtype=self.obs_dtype)
             self.actions = np.empty([self.size] + list(actions.shape), dtype=self.ac_dtype)
-            self.rewards = np.empty([self.size] + list(rewards.shape), dtype=np.float32)
+            self.ext_rewards = np.empty([self.size] + list(ext_rewards.shape), dtype=np.float32)
             self.mus = np.empty([self.size] + list(mus.shape), dtype=np.float32)
             self.dones = np.empty([self.size] + list(dones.shape), dtype=np.bool)
             self.masks = np.empty([self.size] + list(masks.shape), dtype=np.bool)
@@ -67,7 +67,7 @@ class Buffer(object):
 
         self.enc_obs[self.next_idx] = enc_obs
         self.actions[self.next_idx] = actions
-        self.rewards[self.next_idx] = rewards
+        self.ext_rewards[self.next_idx] = ext_rewards
         self.mus[self.next_idx] = mus
         self.dones[self.next_idx] = dones
         self.masks[self.next_idx] = masks
@@ -101,16 +101,20 @@ class Buffer(object):
         enc_obs = take(self.enc_obs)
         obs = self.decode(enc_obs, dones)   # (nenv, nstep+1, nh, nw, nc)
         actions = take(self.actions)
-        rewards = take(self.rewards)
+        ext_rewards = take(self.ext_rewards)
         # (after we recompute goal's, we need recompute mu's) -> deprecated
         mus = take(self.mus)
         masks = take(self.masks)
+
         goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
         goal_obs = self.sample_goal_fn(goal_obs)
-        goal_feat = self.dynamics.extract_feature(goal_obs)
-        obs_feat = self.dynamics.extract_feature(obs)
-        int_rewards = self.reward_fn(obs_feat, goal_feat)
-        return obs, actions, rewards, mus, dones, masks, goal_feat, int_rewards
+
+        goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
+        goal_feat = self.dynamics.extract_feature(goal_obs_flatten)
+        obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
+        obs_feat = self.dynamics.extract_feature(obs_flatten)
+        int_rewards = self.reward_fn(obs_feat, goal_feat)[:-1]     # strip the last rewards
+        return obs, actions, ext_rewards, mus, dones, masks, goal_feat, int_rewards
 
     def initialize(self, obs, actions, next_obs, info):
         self.dynamics.put_goal(obs, actions, next_obs, info)
