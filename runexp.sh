@@ -5,4 +5,4 @@ python run.py \
     --num_env 1 \
     --reward_scale 0.0667 \
     --alg acer \
-    --num_timesteps 1e8
+    --num_timesteps 1e6

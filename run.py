@@ -13,7 +13,7 @@ from baselines import logger
 from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
-
+from curiosity.dynamics import DummyDynamics, Dynamics
 from common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
 
 try:
@@ -76,12 +76,20 @@ def train(args, extra_args):
 
     print('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
 
+    if args.aux_task is None:
+        dynamics = DummyDynamics()
+    else:
+        sess = get_session()
+        queue_size = alg_kwargs.pop("queue_size")
+        feat_dim = alg_kwargs.pop("feat_dim")
+        dynamics = Dynamics(sess, env, args.aux_task, queue_size, feat_dim)
     model = learn(
         env=env,
         seed=seed,
         total_timesteps=total_timesteps,
         save_path=extra_args["save_path"],
         store_data=args.store_data,
+        dynamics=dynamics,
         **alg_kwargs
     )
 

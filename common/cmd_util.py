@@ -168,7 +168,10 @@ def common_arg_parser():
     parser.add_argument('--save_video_length', help='Length of recorded video. Default: 200', default=200, type=int)
     parser.add_argument('--play', default=False, action='store_true')
     parser.add_argument('--store_data', default=False, action='store_true')
+    parser.add_argument('--aux_task', help='auxiliary task type(for acer/curiosity)', type=str, default=None)
+    parser.add_argument('--dynamics', help='dynamics for calculating intrinsic reward/novelty', type=str, default=["RF"], choices=["RF", "RND", "IDF"])
     return parser
+
 
 def robotics_arg_parser():
     """

@@ -5,7 +5,7 @@ import tensorflow as tf
 from baselines import logger
 
 from baselines.common import set_global_seeds
-from baselines.common.policies import build_policy
+from acer.policies import build_policy
 from baselines.common.tf_util import get_session, save_variables
 from baselines.common.vec_env.vec_frame_stack import VecFrameStack
 
@@ -14,13 +14,16 @@ from baselines.a2c.utils import cat_entropy_softmax
 from baselines.a2c.utils import Scheduler, find_trainable_variables
 from baselines.a2c.utils import EpisodeStats
 from baselines.a2c.utils import get_by_index, check_shape, avg_norm, gradient_add, q_explained_variance
-from baselines.acer.buffer import Buffer
-from baselines.acer.runner import Runner
+from acer.buffer import Buffer
+from acer.runner import Runner
+from common.her_sample import make_sample_her_transitions
+
 
 # remove last step
 def strip(var, nenvs, nsteps, flat = False):
     vars = batch_to_seq(var, nenvs, nsteps + 1, flat)
     return seq_to_batch(vars[:-1], flat)
+
 
 def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
     """
@@ -55,8 +58,9 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 #     # assume 0 <= eps_clip <= 1
 #     return tf.minimum(1 + eps_clip, tf.maximum(1 - eps_clip, ratio))
 
+
 class Model(object):
-    def __init__(self, policy, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
+    def __init__(self, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
                  rprop_alpha, rprop_epsilon, total_timesteps, lrschedule,
                  c, trust_region, alpha, delta):
 
@@ -71,30 +75,54 @@ class Model(object):
         LR = tf.placeholder(tf.float32, [])
         eps = 1e-6
 
-        step_ob_placeholder = tf.placeholder(dtype=ob_space.dtype, shape=(nenvs,) + ob_space.shape)
-        train_ob_placeholder = tf.placeholder(dtype=ob_space.dtype, shape=(nenvs*(nsteps+1),) + ob_space.shape)
-        with tf.variable_scope('acer_model', reuse=tf.AUTO_REUSE):
+        self.dynamics = dynamics
+        goal_feat_shape = self.dynamics.feat_shape
 
-            step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder, sess=sess)
-            train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder, sess=sess)
+        step_ob_placeholder = tf.placeholder(ob_space.dtype,(nenvs,) + ob_space.shape, "step_ob")
+        if self.dynamics.dummy:
+            step_goal_placeholder = None
+        else:
+            step_goal_placeholder = tf.placeholder(tf.float32, (nenvs,) + goal_feat_shape, "step_goal")
+
+        train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),) + ob_space.shape, "train_ob")
+        if self.dynamics.dummy:
+            train_goal_placeholder = None
+        else:
+            train_goal_placeholder = tf.placeholder(tf.float32, (nenvs*(nsteps+1),) + goal_feat_shape, "train_goal")
+
+        with tf.variable_scope('acer_model', reuse=tf.AUTO_REUSE):
+            step_model = policy(nbatch=nenvs, nsteps=1,  observ_placeholder=step_ob_placeholder,
+                                goal_placeholder=step_goal_placeholder, sess=sess)
+            train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
+                                 goal_placeholder=train_goal_placeholder, sess=sess)
 
         variables = find_trainable_variables
         params = variables("acer_model")
-        print("Params {}".format(len(params)))
+        logger.info("========================== Acer =============================")
         for var in params:
-            print(var)
+            logger.info(var)
+        logger.info("========================== Acer =============================")
+
+        logger.info("======================== Aux & Dyna =========================")
+        for var in self.dynamics.params:
+            logger.info(var)
+        logger.info("======================== Aux & Dyna =========================")
 
         # create polyak averaged model
         ema = tf.train.ExponentialMovingAverage(alpha)
         ema_apply_op = ema.apply(params)
 
+        # print("========================== Ema =============================")
+
         def custom_getter(getter, *args, **kwargs):
             v = ema.average(getter(*args, **kwargs))
-            print(v.name)
+            # print(v.name)
             return v
+        # print("========================== Ema =============================")
 
         with tf.variable_scope("acer_model", custom_getter=custom_getter, reuse=True):
-            polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder, sess=sess)
+            polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
+                                  goal_placeholder=train_goal_placeholder, sess=sess)
 
         # Notation: (var) = batch variable, (var)s = seqeuence variable, (var)_i = variable index by action at step i
 
@@ -150,6 +178,8 @@ class Model(object):
 
         # Net loss
         check_shape([loss_policy, loss_q, entropy], [[]] * 3)
+
+        # Goal loss
         loss = loss_policy + q_coef * loss_q - ent_coef * entropy
 
         if trust_region:
@@ -181,10 +211,14 @@ class Model(object):
             grads, norm_grads = tf.clip_by_global_norm(grads, max_grad_norm)
         grads = list(zip(grads, params))
         trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=rprop_alpha, epsilon=rprop_epsilon)
-        _opt_op = trainer.apply_gradients(grads)
-
+        _policy_opt_op = trainer.apply_gradients(grads)
+        if not self.dynamics.dummy:
+            _dynamics_opt_op = trainer.minimize(self.dynamics.loss)
+            _opt_op = [_policy_opt_op, _dynamics_opt_op]
+        else:
+            _opt_op = [_policy_opt_op]
         # so when you call _train, you first do the gradient step, then you apply ema
-        with tf.control_dependencies([_opt_op]):
+        with tf.control_dependencies(_opt_op):
             _train = tf.group(ema_apply_op)
 
         lr = Scheduler(v=lr, nvalues=total_timesteps, schedule=lrschedule)
@@ -198,10 +232,19 @@ class Model(object):
                                  avg_norm_adj]
             names_ops = names_ops + ['norm_grads_q', 'norm_grads_policy', 'avg_norm_grads_f', 'avg_norm_k', 'avg_norm_g',
                                      'avg_norm_k_dot_g', 'avg_norm_adj']
+        if not self.dynamics.dummy:
+            run_ops = run_ops + [self.dynamics.aux_loss, self.dynamics.dyna_loss, self.dynamics.feat_var]
+            names_ops = names_ops + ["aux_loss", "dyna_loss", "goal_feat_var"]
 
-        def train(obs, actions, rewards, dones, mus, states, masks, steps):
+        def train(obs, actions, rewards, dones, mus, states, masks, steps, goal_feats):
             cur_lr = lr.value_steps(steps)
             td_map = {train_model.X: obs, polyak_model.X: obs, A: actions, R: rewards, D: dones, MU: mus, LR: cur_lr}
+            if not self.dynamics.dummy:
+                assert hasattr(train_model, "goals")
+                td_map[train_model.goals] = goal_feats
+                td_map[self.dynamics.obs] = obs[:-1]
+                td_map[self.dynamics.next_obs] = obs[1:]
+                td_map[self.dynamics.ac] = actions
             if states is not None:
                 td_map[train_model.S] = states
                 td_map[train_model.M] = masks
@@ -212,8 +255,6 @@ class Model(object):
 
         def _step(observation, **kwargs):
             return step_model._evaluate([step_model.action, step_model_p, step_model.state], observation, **kwargs)
-
-
 
         self.train = train
         self.save = functools.partial(save_variables, sess=sess, variables=params)
@@ -226,7 +267,7 @@ class Model(object):
         tf.global_variables_initializer().run(session=sess)
 
 
-class Acer():
+class Acer:
     def __init__(self, runner, model, buffer, log_interval):
         self.runner = runner
         self.model = model
@@ -239,16 +280,15 @@ class Acer():
     def call(self, on_policy):
         runner, model, buffer, steps = self.runner, self.model, self.buffer, self.steps
         if on_policy:
-            enc_obs, obs, actions, rewards, mus, dones, masks = runner.run()
+            enc_obs, obs, actions, rewards, mus, dones, masks, goal_obs, goal_feats = runner.run()
             self.episode_stats.feed(rewards, dones)
             if buffer is not None:
-                buffer.put(enc_obs, actions, rewards, mus, dones, masks)
+                buffer.put(enc_obs, actions, rewards, mus, dones, masks, goal_obs)
         else:
             # get obs, actions, rewards, mus, dones from buffer.
-            obs, actions, rewards, mus, dones, masks = buffer.get()
+            obs, actions, rewards, mus, dones, masks, goal_feats, int_rewards = buffer.get()     # todo: add her
 
-
-        # reshape stuff correctly
+        # reshape stuff correctly except goal_feats
         obs = obs.reshape(runner.batch_ob_shape)
         actions = actions.reshape([runner.nbatch])
         rewards = rewards.reshape([runner.nbatch])
@@ -256,7 +296,9 @@ class Acer():
         dones = dones.reshape([runner.nbatch])
         masks = masks.reshape([runner.batch_ob_shape[0]])
 
-        names_ops, values_ops = model.train(obs, actions, rewards, dones, mus, model.initial_state, masks, steps)
+        names_ops, values_ops = model.train(
+            obs, actions, rewards, dones, mus, model.initial_state, masks, steps, goal_feats
+        )
 
         if on_policy and (int(steps/runner.nbatch) % self.log_interval == 0):
             logger.record_tabular("total_timesteps", steps)
@@ -270,11 +312,16 @@ class Acer():
                 logger.record_tabular(name, float(val))
             logger.dump_tabular()
 
+    def initialize(self):
+        init_steps = int(1e3)
+        obs, actions, next_obs, info = self.runner.initialize(init_steps)
+        self.buffer.initialize(obs, actions, next_obs, info)
+
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
-          log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0,
-          trust_region=True, alpha=0.99, delta=1, load_path=None, save_path=None, store_data=False, **network_kwargs):
+          log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
+          alpha=0.99, delta=1, load_path=None, save_path=None, store_data=False, dynamics=None, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -340,8 +387,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     '''
 
-    print("Running Acer Simple")
-    print(locals())
+    logger.info("Running Acer with following kwargs")
+    logger.info(locals())
     set_global_seeds(seed)
     if not isinstance(env, VecFrameStack):
         env = VecFrameStack(env, 1)
@@ -356,16 +403,31 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                   ent_coef=ent_coef, q_coef=q_coef, gamma=gamma,
                   max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha, rprop_epsilon=rprop_epsilon,
                   total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
-                  trust_region=trust_region, alpha=alpha, delta=delta)
+                  trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dynamics)
 
-    runner = Runner(env=env, model=model, nsteps=nsteps)
+    runner = Runner(env=env, model=model, nsteps=nsteps, save_path=save_path, store_data=store_data)
+
+    if dynamics.dummy:
+        def reward_fn(current_state, desired_goal):
+            return np.zeros(current_state.shape[0])
+    else:
+        def reward_fn(current_state, desired_goal):
+            eps = 1e-6
+            return np.linalg.norm(current_state-desired_goal) / (eps + np.linalg.norm(desired_goal))
+
     if replay_ratio > 0:
-        buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size)
+        buffer = Buffer(
+            env=env, nsteps=nsteps, size=buffer_size, dynamics=dynamics, reward_fn=reward_fn,
+            sample_goal_fn=make_sample_her_transitions
+        )
     else:
         buffer = None
     nbatch = nenvs*nsteps
     acer = Acer(runner, model, buffer, log_interval)
     acer.tstart = time.time()
+
+    # === init to make sure we can get goal ===
+    acer.initialize()
 
     for acer.steps in range(0, total_timesteps, nbatch): #nbatch samples, 1 on_policy call and multiple off-policy calls
         acer.call(on_policy=True)

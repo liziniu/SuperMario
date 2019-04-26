@@ -4,6 +4,7 @@ from gym import spaces
 from common.util import fc
 from curiosity.auxilliary_tasks import RandomFeature, InverseDynamics, RandomNetworkDistillation
 import numpy as np
+import time
 
 
 class DummyDynamics:
@@ -13,7 +14,7 @@ class DummyDynamics:
         self.dyna_params = []
         self.aux_params = []
         self.params = self.dyna_params + self.aux_params
-
+        self.feat_shape = []
         self.aux_loss = tf.zeros([])
         self.dyna_loss = tf.zeros([])
         self.loss = tf.zeros([])
@@ -26,8 +27,8 @@ class DummyDynamics:
 
     def get_goal(self, nb_goal):
         # goal_feat, goal_obs, goal_info
-        goal_feat = np.empty([nb_goal, ])
-        goal_obs = np.empty([nb_goal, ])
+        goal_feat = np.empty([nb_goal, ] + self.feat_shape)
+        goal_obs = np.empty([nb_goal, ] + self.feat_shape)
         goal_info = {}
         return goal_feat, goal_obs, goal_info
 
@@ -45,7 +46,8 @@ class Dynamics:
         self.ac = self.auxiliary_task.ac
         self.ac_space = self.auxiliary_task.ac_space
 
-        self.goal = self.feat = tf.stop_gradient(self.auxiliary_task.feature)
+        self.feat = tf.stop_gradient(self.auxiliary_task.feature)
+        self.feat_shape = tuple(self.feat.get_shape().as_list()[1:])
         self.feat_var = tf.reduce_mean(tf.nn.moments(self.feat, [0, 1])[1])
         self.out_feat = tf.stop_gradient(self.auxiliary_task.next_feature)
 
@@ -54,7 +56,7 @@ class Dynamics:
                 self.dyna_loss = tf.zeros([])
             elif isinstance(self.auxiliary_task, InverseDynamics) or isinstance(self.auxiliary_task, RandomFeature):
                 with tf.variable_scope("loss"):
-                    self.novelty = self.get_novelty()
+                    self.novelty = self._get_novelty()
                     self.dyna_loss = tf.reduce_mean(self.novelty)
             else:
                 raise NotImplementedError
@@ -68,7 +70,7 @@ class Dynamics:
 
         self.queue = PriorityQueue(queue_size)
 
-    def get_novelty(self):
+    def _get_novelty(self):
         if isinstance(self.ac_space, spaces.Box):
             assert len(self.ac_space.shape) == 1
         elif isinstance(self.ac_space, spaces.Discrete):
@@ -101,30 +103,30 @@ class Dynamics:
         x = fc(add_ac(x), nh=n_out_features, scope="output")
         return tf.reduce_mean(tf.square(x - self.out_feat), axis=-1)
 
-    def extract_feature(self, x):
-        assert list(x.shape) == self.auxiliary_task.obs.get_shape.as_list()[1:]
-        return self.sess.run(self.feat, feed_dict={self.auxiliary_task.obs: x})
+    def extract_feature(self, obs):
+        assert list(obs.shape)[1:] == self.auxiliary_task.obs.get_shape().as_list()[1:], "obs's shape:{} is wrong".format(obs.shape)
+        return self.sess.run(self.feat, feed_dict={self.auxiliary_task.obs: obs})
 
-    def put_goal(self, obs, info):
-        if len(obs.shape) > len(self.obs.get_shape().as_list()):
-            obs = np.copy(obs)
-            obs = obs.reshape([-1, ] + self.obs.get_shape().as_list()[1:])
-        assert list(obs.shape)[1:] == self.obs.get_shape().as_list()[1:]
-        priority = self.sess.run(self.dyna_loss, feed_dict={self.obs: obs})
+    def put_goal(self, obs, actions, next_obs, info):
+        assert list(obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "obs shape:{}.please flatten obs".format(obs.shape)
+        assert list(actions.shape)[1:] == self.ac.get_shape().as_list()[1:], "action shape:{}.please flatten actions".format(actions.shape)
+        assert list(next_obs.shape)[1:] == self.next_obs.get_shape().as_list()[1:], "next obs shape:{}.please flatten obs".format(next_obs.shape)
+        assert len(info.shape) == 1, "info shape:{}".format(info.shape)
+        priority = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
         for i in range(len(obs)):
-            data = {"obs": obs[i], "info": info[i]}
+            data = (priority[i], time.time(), obs[i], info[i])
             # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
-            self.queue.put(data, priority[i])
+            self.queue.put(data)  # tge
 
     def get_goal(self, nb_goal):
         assert self.queue.qsize() >= nb_goal
         goal_feat, goal_obs, goal_info = [], [], []
         for i in range(nb_goal):
             data = self.queue.get()
-            goal_obs.append(data["obs"])
-            goal_info.append(data["info"])
+            goal_obs.append(data[-2])
+            goal_info.append(data[-1])
         goal_obs = np.asarray(goal_obs)
-        assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:]
+        assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goal_obs.shape)
         goal_feat = self.sess.run(self.feat, feed_dict={self.obs: goal_obs})
         return goal_feat, goal_obs, goal_info
 

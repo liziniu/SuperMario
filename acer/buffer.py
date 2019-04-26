@@ -1,10 +1,17 @@
 import numpy as np
 
+
 class Buffer(object):
     # gets obs, actions, rewards, mu's, (states, masks), dones
-    def __init__(self, env, nsteps, size=50000):
+    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, size=50000):
         self.nenv = env.num_envs
         self.nsteps = nsteps
+        assert callable(sample_goal_fn)
+        assert callable(reward_fn)
+        self.sample_goal_fn = sample_goal_fn
+        self.dynamics = dynamics
+        self.reward_fn = reward_fn
+        assert hasattr(self.dynamics, "extract_feature")
         # self.nh, self.nw, self.nc = env.observation_space.shape
         self.obs_shape = env.observation_space.shape
         self.obs_dtype = env.observation_space.dtype
@@ -22,7 +29,7 @@ class Buffer(object):
         self.mus = None
         self.dones = None
         self.masks = None
-
+        self.goal_obs = None
         # Size indexes
         self.next_idx = 0
         self.num_in_buffer = 0
@@ -44,7 +51,7 @@ class Buffer(object):
         return _stack_obs(enc_obs, dones,
                           nsteps=self.nsteps)
 
-    def put(self, enc_obs, actions, rewards, mus, dones, masks):
+    def put(self, enc_obs, actions, rewards, mus, dones, masks, goal_obs):
         # enc_obs [nenv, (nsteps + nstack), nh, nw, nc]
         # actions, rewards, dones [nenv, nsteps]
         # mus [nenv, nsteps, nact]
@@ -56,6 +63,7 @@ class Buffer(object):
             self.mus = np.empty([self.size] + list(mus.shape), dtype=np.float32)
             self.dones = np.empty([self.size] + list(dones.shape), dtype=np.bool)
             self.masks = np.empty([self.size] + list(masks.shape), dtype=np.bool)
+            self.goal_obs = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
 
         self.enc_obs[self.next_idx] = enc_obs
         self.actions[self.next_idx] = actions
@@ -63,6 +71,7 @@ class Buffer(object):
         self.mus[self.next_idx] = mus
         self.dones[self.next_idx] = dones
         self.masks[self.next_idx] = masks
+        self.goal_obs[self.next_idx] = goal_obs
 
         self.next_idx = (self.next_idx + 1) % self.size
         self.num_in_buffer = min(self.size, self.num_in_buffer + 1)
@@ -74,6 +83,7 @@ class Buffer(object):
             out[i] = x[idx[i], envx[i]]
         return out
 
+    # todo: add her
     def get(self):
         # returns
         # obs [nenv, (nsteps + 1), nh, nw, nstack*nc]
@@ -89,13 +99,21 @@ class Buffer(object):
         take = lambda x: self.take(x, idx, envx)  # for i in range(nenv)], axis = 0)
         dones = take(self.dones)
         enc_obs = take(self.enc_obs)
-        obs = self.decode(enc_obs, dones)
+        obs = self.decode(enc_obs, dones)   # (nenv, nstep+1, nh, nw, nc)
         actions = take(self.actions)
         rewards = take(self.rewards)
+        # (after we recompute goal's, we need recompute mu's) -> deprecated
         mus = take(self.mus)
         masks = take(self.masks)
-        return obs, actions, rewards, mus, dones, masks
+        goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
+        goal_obs = self.sample_goal_fn(goal_obs)
+        goal_feat = self.dynamics.extract_feature(goal_obs)
+        obs_feat = self.dynamics.extract_feature(obs)
+        int_rewards = self.reward_fn(obs_feat, goal_feat)
+        return obs, actions, rewards, mus, dones, masks, goal_feat, int_rewards
 
+    def initialize(self, obs, actions, next_obs, info):
+        self.dynamics.put_goal(obs, actions, next_obs, info)
 
 
 def _stack_obs_ref(enc_obs, dones, nsteps):
@@ -120,6 +138,7 @@ def _stack_obs_ref(enc_obs, dones, nsteps):
         mask = mask[1:]
 
     return np.reshape(obs[:, (nstack-1):].transpose((2, 1, 3, 4, 0, 5)), (nenv, (nsteps + 1)) + obs_shape)
+
 
 def _stack_obs(enc_obs, dones, nsteps):
     nenv = enc_obs.shape[0]

@@ -1,4 +1,6 @@
 def atari():
     return dict(
-        lrschedule='constant'
+        lrschedule='constant',
+        queue_size=1000,
+        feat_dim=512,
     )

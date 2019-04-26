@@ -1,26 +1,6 @@
 import numpy as np
 from baselines.common.runners import AbstractEnvRunner
-import os
-import pickle
-from baselines import logger
-
-
-class Recorder:
-    def __init__(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        self.path = path
-        self.file = open(os.path.join(path, "data.pkl"), "wb")
-        self.file.close()
-        self.memory = []
-
-    def store(self, data):
-        self.memory.append(data)
-
-    def dump(self):
-        with open(os.path.join(self.path, "data.pkl"), "ab+") as f:
-            pickle.dump(self.memory, f, -1)
-        self.memory = []
+from common.util import DataRecorder
 
 
 class Runner(AbstractEnvRunner):
@@ -38,7 +18,7 @@ class Runner(AbstractEnvRunner):
         self.lam = lam
         # Discount rate
         self.gamma = gamma
-        self.recorder = Recorder(save_path)
+        self.recorder = DataRecorder(save_path)
         self.episode = np.zeros(self.nenv)
         self.timestamp = np.zeros(self.nenv)
         self.store_data = store_data
