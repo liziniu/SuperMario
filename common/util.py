@@ -1,6 +1,8 @@
 import tensorflow as tf
 from baselines.a2c.utils import conv_to_fc, fc
 import numpy as np
+import os
+import pickle
 
 
 def conv(x, scope, *, nf, rf, stride, pad='VALID', init_scale=1.0, data_format='NHWC', one_dim_bias=False, reuse=False):
@@ -55,8 +57,26 @@ def cnn(unscaled_images, scope, activ=None, nfeat=None, reuse=False):
     scaled_images = tf.cast(unscaled_images, tf.float32) / 255.
     activ = activ or tf.nn.leaky_relu
     nfeat = nfeat or 512
-    h = activ(conv(scaled_images, scope+'c1', nf=32, rf=8, stride=4, init_scale=np.sqrt(2), reuse=reuse))
-    h2 = activ(conv(h, scope+'c2', nf=64, rf=4, stride=2, init_scale=np.sqrt(2), reuse=reuse))
-    h3 = activ(conv(h2, scope+'c3', nf=64, rf=3, stride=1, init_scale=np.sqrt(2), reuse=reuse))
+    h = activ(conv(scaled_images, scope+'_conv1', nf=32, rf=8, stride=4, init_scale=np.sqrt(2), reuse=reuse))
+    h2 = activ(conv(h, scope+'_conv2', nf=64, rf=4, stride=2, init_scale=np.sqrt(2), reuse=reuse))
+    h3 = activ(conv(h2, scope+'_conv3', nf=64, rf=3, stride=1, init_scale=np.sqrt(2), reuse=reuse))
     h3 = conv_to_fc(h3)
-    return fc(h3, scope+'fc1', nh=nfeat, init_scale=np.sqrt(2))
+    return fc(h3, scope+'_conv_to_fc', nh=nfeat, init_scale=np.sqrt(2), reuse=reuse)
+
+
+class DataRecorder:
+    def __init__(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.path = path
+        self.file = open(os.path.join(path, "data.pkl"), "wb")
+        self.file.close()
+        self.memory = []
+
+    def store(self, data):
+        self.memory.append(data)
+
+    def dump(self):
+        with open(os.path.join(self.path, "data.pkl"), "ab+") as f:
+            pickle.dump(self.memory, f, -1)
+        self.memory = []
