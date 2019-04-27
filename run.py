@@ -5,7 +5,6 @@ import re
 import sys
 from collections import defaultdict
 from importlib import import_module
-
 import gym
 import numpy as np
 import tensorflow as tf
@@ -14,7 +13,8 @@ from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
 from curiosity.dynamics import DummyDynamics, Dynamics
-from common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
+from common.cmd_util import common_arg_parser, parse_unknown_args
+from common.env_util import make_vec_env, make_env
 
 try:
     from mpi4py import MPI
@@ -164,6 +164,7 @@ def get_default_network(env_type):
     else:
         return 'mlp'
 
+
 def get_alg_module(alg, submodule=None):
     submodule = submodule or alg
     # try:
@@ -190,13 +191,11 @@ def get_learn_function_defaults(alg, env_type):
     return kwargs
 
 
-
 def parse_cmdline_kwargs(args):
     '''
     convert a list of '='-spaced command-line arguments to a dictionary, evaluating python objects when possible
     '''
     def parse(v):
-
         assert isinstance(v, str)
         try:
             return eval(v)
@@ -204,7 +203,6 @@ def parse_cmdline_kwargs(args):
             return v
 
     return {k: parse(v) for k,v in parse_unknown_args(args).items()}
-
 
 
 def main(args):

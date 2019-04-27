@@ -3,6 +3,8 @@ from baselines.a2c.utils import conv_to_fc, fc
 import numpy as np
 import os
 import pickle
+import csv
+import json
 
 
 def conv(x, scope, *, nf, rf, stride, pad='VALID', init_scale=1.0, data_format='NHWC', one_dim_bias=False, reuse=False):
@@ -72,6 +74,30 @@ def gradient_add(g1, g2, param):
         return g1
     else:
         return g1 + g2
+
+
+class ResultsWriter(object):
+    def __init__(self, filename, header='', extra_keys=()):
+        self.extra_keys = extra_keys
+        assert filename is not None
+        if not filename.endswith(".csv"):
+            filename += ".csv"
+        if os.path.exists(filename):
+            self.f = open(filename, "at")
+            self.logger = csv.DictWriter(self.f, fieldnames=('r', 'l', 't')+tuple(extra_keys))
+        else:
+            self.f = open(filename, "wt")
+            if isinstance(header, dict):
+                header = '# {} \n'.format(json.dumps(header))
+                self.f.write(header)
+            self.logger = csv.DictWriter(self.f, fieldnames=('r', 'l', 't')+tuple(extra_keys))
+            self.logger.writeheader()
+        self.f.flush()
+
+    def write_row(self, epinfo):
+        if self.logger:
+            self.logger.writerow(epinfo)
+            self.f.flush()
 
 
 class DataRecorder:

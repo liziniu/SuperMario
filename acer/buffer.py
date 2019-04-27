@@ -102,7 +102,6 @@ class Buffer(object):
         obs = self.decode(enc_obs, dones)   # (nenv, nstep+1, nh, nw, nc)
         actions = take(self.actions)
         ext_rewards = take(self.ext_rewards)
-        # (after we recompute goal's, we need recompute mu's) -> deprecated
         mus = take(self.mus)
         masks = take(self.masks)
 
@@ -114,6 +113,7 @@ class Buffer(object):
         obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
         obs_feat = self.dynamics.extract_feature(obs_flatten)
         int_rewards = self.reward_fn(obs_feat, goal_feat)[:-1]     # strip the last rewards
+
         return obs, actions, ext_rewards, mus, dones, masks, goal_feat, int_rewards
 
     def initialize(self, obs, actions, next_obs, info):

@@ -9,26 +9,41 @@ from acer.buffer import Buffer
 from acer.runner import Runner
 from common.her_sample import make_sample_her_transitions
 from acer.model import Model
+from common.env_util import parser_env_id, build_env, get_env_type
+from queue import deque
 
 
 class Acer:
-    def __init__(self, runner, model_exploration, model_evaluation, buffer, log_interval):
+    def __init__(self, runner, runner_eval, model, model_eval, buffer, log_interval, eval_interval):
         self.runner = runner
-        self.model_exploration = model_exploration
-        self.model_evaluation = model_evaluation
+        self.model = model
+        self.model_eval = model_eval
         self.buffer = buffer
         self.log_interval = log_interval
+        self.eval_interval = eval_interval
         self.tstart = None
         self.episode_stats = EpisodeStats(runner.nsteps, runner.nenv)
         self.steps = None
+        self.runner_eval = runner_eval
+        self.nupdates = 0
+
+        self.reached_cnt = deque(maxlen=100)
+        self.reached_time_ratio = deque(maxlen=100)
+        self.eval_len = deque(maxlen=50)
+        self.eval_rew = deque(maxlen=50)
 
     def call(self, on_policy):
-        runner, model, model_eval, buffer, steps = self.runner, self.model_exploration, self.model_evaluation, self.buffer, self.steps
+        runner, model, model_eval, buffer, steps = self.runner, self.model, self.model_eval, self.buffer, self.steps
         if on_policy:
-            enc_obs, obs, actions, ext_rewards, mus, dones, masks, goal_obs, goal_feats, int_rewards = runner.run()
+            enc_obs, obs, actions, ext_rewards, mus, dones, masks, goal_obs, goal_feats, int_rewards, mb_infos = runner.run()
             self.episode_stats.feed(ext_rewards, dones)
             if buffer is not None:
                 buffer.put(enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs)
+            for info in mb_infos:
+                reached_info = info.get("reached_info")
+                if reached_info:
+                    self.reached_cnt.append(reached_info["reached"])
+                    self.reached_time_ratio.append(reached_info["time_ratio"])
         else:
             obs, actions, ext_rewards, mus, dones, masks, goal_feats, int_rewards = buffer.get()     # todo: add her
 
@@ -41,7 +56,6 @@ class Acer:
         masks = masks.reshape([runner.batch_ob_shape[0]])
         # we do not reshape goal_feats, and int_rewards
 
-        # todo: batch process
         if model.scope != model_eval.scope:
             names_ops_policy, values_ops_policy = model.train_policy(
                 obs, actions, int_rewards, dones, mus, model.initial_state, masks, steps, goal_feats)
@@ -57,31 +71,71 @@ class Acer:
             )
         if on_policy:
             names_ops_dynamics, values_ops_dynamics = model.train_dynamics(obs, actions, steps)
-        if on_policy and (int(steps/runner.nbatch) % self.log_interval == 0):
-            logger.record_tabular("total_timesteps", steps)
-            logger.record_tabular("fps", int(steps/(time.time() - self.tstart)))
-            # IMP: In EpisodicLife env, during training, we get done=True at each loss of life, not just at the terminal state.
-            # Thus, this is mean until end of life, not end of episode.
-            # For true episode rewards, see the monitor files in the log folder.
-            logger.record_tabular("mean_episode_length", self.episode_stats.mean_length())
-            logger.record_tabular("mean_episode_reward", self.episode_stats.mean_reward())
-            for name, val in zip(names_ops_policy+names_ops_dynamics, values_ops_policy+values_ops_dynamics):
-                logger.record_tabular(name, float(val))
-            logger.dump_tabular()
+        self.nupdates += 1
 
-    def evaluate(self):
-        pass
+        if on_policy:
+            if int(steps/runner.nbatch) % self.log_interval == 0:
+                logger.record_tabular("total_timesteps", steps)
+                logger.record_tabular("fps", int(steps/(time.time() - self.tstart)))
+                logger.record_tabular("time_elapse(min)", int(time.time()-self.tstart)//60)
+                logger.record_tabular("nupdates", self.nupdates)
+                logger.record_tabular("expl_episode_length", self.episode_stats.mean_length())
+                logger.record_tabular("expl_episode_reward", self.episode_stats.mean_reward())
+                logger.record_tabular("eval_episode_length", self.mean_eval_length)
+                logger.record_tabular("eval_episode_reward", self.mean_eval_reward)
+                if not self.model.dynamics.dummy:
+                    logger.record_tabular("mean_reached_ratio", self.mean_reached_ratio)
+                    logger.record_tabular("mean_reached_time", self.mean_reached_time)
+                for name, val in zip(names_ops_policy+names_ops_dynamics, values_ops_policy+values_ops_dynamics):
+                    logger.record_tabular(name, float(val))
+                logger.dump_tabular()
+            if self.eval_interval and int(steps/runner.nbatch) % self.eval_interval == 0:
+                eval_rew, eval_len = self.evaluate(nb_eval=1)
+                self.eval_rew.append(eval_rew)
+                self.eval_len.append(eval_len)
 
     def initialize(self):
         init_steps = int(1e3)
         obs, actions, next_obs, info = self.runner.initialize(init_steps)
         self.buffer.initialize(obs, actions, next_obs, info)
 
+    def evaluate(self, nb_eval):
+        return self.runner_eval.evaluate(nb_eval)
+
+    @property
+    def mean_reached_ratio(self):
+        if self.reached_cnt:
+            return np.sum(self.reached_cnt) / self.reached_cnt.maxlen
+        else:
+            return 0.
+
+    @property
+    def mean_reached_time(self):
+        if self.reached_time_ratio:
+            return np.mean(self.reached_time_ratio)
+        else:
+            return 0.
+
+    @property
+    def mean_eval_reward(self):
+        if self.eval_rew:
+            return np.mean(self.eval_rew)
+        else:
+            return 0.
+
+    @property
+    def mean_eval_length(self):
+        if self.eval_len:
+            return np.mean(self.eval_len)
+        else:
+            return 0.
+
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
-          log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=2000, c=10.0, trust_region=True,
-          alpha=0.99, delta=1, replay_k=4, load_path=None, save_path=None, store_data=False, dynamics=None, **network_kwargs):
+          log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
+          alpha=0.99, delta=1, replay_k=4, load_path=None, save_path=None, store_data=False, dynamics=None, eval_env=None,
+          eval_interval=100, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -155,6 +209,38 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     if not isinstance(env, VecFrameStack):
         env = VecFrameStack(env, 1)
 
+    if eval_env is None:
+        logger.warn("eval_env is None. trying to parser_env_id.")
+        env_id = parser_env_id(env)
+        if env_id:
+            env_type, env_id = get_env_type(env_id)
+            eval_env = build_env(env_id, num_env=1, alg="acer", reward_scale=1.0)
+            logger.warn("sucess build eval env:{}!".format(env_id))
+        else:
+            raise ValueError("Rebuild Eval Env Fail!")
+    else:
+        if not hasattr(eval_env, "num_env"):
+            logger.warn("eval env not have the attribute of num_env!")
+            logger.warn("we rebuild eval_env!")
+            env_id = parser_env_id(env)
+            if env_id:
+                env_type, env_id = get_env_type(env_id)
+                eval_env = build_env(env_id, num_env=1, alg="acer", reward_scale=1.0)
+                logger.warn("sucess build eval env:{}!".format(env_id))
+            else:
+                raise ValueError("Rebuild Eval Env Fail!")
+        else:
+            if eval_env.num_env != 1:
+                logger.warn("eval env's num_env must 1!")
+                logger.warn("we rebuild eval_env!")
+                env_id = parser_env_id(env)
+                if env_id:
+                    env_type, env_id = get_env_type(env_id)
+                    eval_env = build_env(env_id, num_env=1, alg="acer", reward_scale=1.0)
+                    logger.warn("sucess build eval env:{}!".format(env_id))
+                else:
+                    raise ValueError("Rebuild Eval Env Fail!")
+
     policy = build_policy(env, network, estimate_q=True, **network_kwargs)
     nenvs = env.num_envs
     ob_space = env.observation_space
@@ -191,7 +277,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             return np.sum(np.square(current_state-desired_goal), -1) / (eps+np.sum(np.square(desired_goal), -1))
 
     runner_training = Runner(env=env, model=model_exploration, nsteps=nsteps, save_path=save_path, store_data=store_data, reward_fn=reward_fn)
-    runner_evaluation = Runner(env=env, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data, reward_fn=reward_fn)
+    runner_evaluation = Runner(env=eval_env, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data, reward_fn=reward_fn)
 
     if replay_ratio > 0:
         sample_goal_fn = make_sample_her_transitions("future", replay_k)
@@ -202,7 +288,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     else:
         buffer = None
     nbatch = nenvs*nsteps
-    acer = Acer(runner_training, model_exploration, model_evaluation, buffer, log_interval)
+    acer = Acer(runner_training, runner_evaluation, model_exploration, model_evaluation, buffer, log_interval, eval_interval)
     acer.tstart = time.time()
 
     # === init to make sure we can get goal ===
@@ -214,8 +300,5 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             n = np.random.poisson(replay_ratio)
             for _ in range(n):
                 acer.call(on_policy=False)  # no simulation steps in this
-
-    # === Evaluation ===
-    acer.evaluate()
 
     return model_evaluation
