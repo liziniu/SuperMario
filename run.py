@@ -78,6 +78,8 @@ def train(args, extra_args):
 
     if args.aux_task is None:
         dynamics = DummyDynamics()
+        alg_kwargs.pop("queue_size")
+        alg_kwargs.pop("feat_dim")
     else:
         sess = get_session()
         queue_size = alg_kwargs.pop("queue_size")
