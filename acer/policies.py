@@ -75,7 +75,7 @@ class PolicyWithValue(object):
             self.vf = fc(vf_latent, 'vf', 1)
             self.vf = self.vf[:, 0]
 
-    def _evaluate(self, variables, observation, **extra_feed):
+    def evaluate(self, variables, observation, **extra_feed):
         sess = self.sess
         feed_dict = {self.X: adjust_shape(self.X, observation)}
         for inpt_name, data in extra_feed.items():
@@ -91,7 +91,7 @@ class PolicyWithValue(object):
         Important !!!
         If using goals please ensure to specify extra_feed[goals]
         """
-        a, v, state, neglogp = self._evaluate([self.action, self.vf, self.state, self.neglogp], observation, **extra_feed)
+        a, v, state, neglogp = self.evaluate([self.action, self.vf, self.state, self.neglogp], observation, **extra_feed)
         if state.size == 0:
             state = None
         return a, v, state, neglogp
@@ -102,7 +102,7 @@ class PolicyWithValue(object):
         If using goals please ensure to specify extra_feed[goals]
         """
         print("{} is useless.".format(args))
-        return self._evaluate(self.vf, ob, **kwargs)
+        return self.evaluate(self.vf, ob, **kwargs)
 
     def save(self, save_path):
         tf_util.save_state(save_path, sess=self.sess)

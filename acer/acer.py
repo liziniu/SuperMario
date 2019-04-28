@@ -62,7 +62,7 @@ class Acer:
 
             # Actually we do not feed goal_feats into policy!
             names_ops_policy_, values_ops_policy_ = model_eval.train_policy(
-                obs, actions, ext_rewards, dones, mus, model.initial_state, masks, steps, goal_feats)
+                obs, actions, ext_rewards, dones, mus, model_eval.initial_state, masks, steps, goal_feats)
             names_ops_policy += names_ops_policy_
             values_ops_policy += values_ops_policy_
         else:

@@ -56,7 +56,7 @@ class Runner(AbstractEnvRunner):
 
         mb_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
-            actions, mus, states = self.model._step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
+            actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
             actions[self.reached_status] = self.simple_random_action()
             mus[self.reached_status] = self.get_mu_of_random_action()
 
@@ -117,7 +117,8 @@ class Runner(AbstractEnvRunner):
                     self.recorder.dump()
         mb_obs.append(np.copy(self.obs))
         mb_dones.append(self.dones)
-        mb_goal_obs.append(np.copy(self.goal_obs)) # make dimension is true. we use this additional goal to retrace q value.
+        # make dimension is true. we use this additional goal to retrace q value.
+        mb_goal_obs.append(np.copy(self.goal_obs))
         obs_feat = self.dynamics.extract_feature(np.copy(self.obs))
         mb_obs_feats.append(obs_feat)
 
@@ -197,7 +198,7 @@ class Runner(AbstractEnvRunner):
             step = 0
             ret = 0
             while True:
-                actions, mus, states = self.model._step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
+                actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
                 obs, rewards, dones, infos = self.env.step(actions)
                 ret += rewards[0]
                 info = infos[0]

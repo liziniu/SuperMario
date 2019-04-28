@@ -54,7 +54,7 @@ class Model(object):
     def __init__(self, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
                  rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope):
 
-        sess = get_session()
+        self.sess = get_session()
         nact = ac_space.n
         nbatch = nenvs * nsteps
         eps = 1e-6
@@ -64,11 +64,11 @@ class Model(object):
 
         self.scope = scope
         with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-            A = tf.placeholder(tf.int32, [nbatch], name="action")  # actions
-            D = tf.placeholder(tf.float32, [nbatch], name="dones")  # dones
-            R = tf.placeholder(tf.float32, [nbatch], name="rewards")  # rewards, not returns
-            MU = tf.placeholder(tf.float32, [nbatch, nact], name="mus")  # mu's
-            LR = tf.placeholder(tf.float32, [], name="lr")
+            self.A = tf.placeholder(tf.int32, [nbatch], name="action")  # actions
+            self.D = tf.placeholder(tf.float32, [nbatch], name="dones")  # dones
+            self.R = tf.placeholder(tf.float32, [nbatch], name="rewards")  # rewards, not returns
+            self.MU = tf.placeholder(tf.float32, [nbatch, nact], name="mus")  # mu's
+            self.LR = tf.placeholder(tf.float32, [], name="lr")
 
             step_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_ob")
             if self.dynamics.dummy:
@@ -76,16 +76,16 @@ class Model(object):
             else:
                 step_goal_placeholder = tf.placeholder(tf.float32, (nenvs,) + goal_feat_shape, "step_goal")
 
-            train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs * (nsteps + 1),) + ob_space.shape, "train_ob")
+            train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),)+ob_space.shape, "train_ob")
             if self.dynamics.dummy:
                 train_goal_placeholder = None
             else:
-                train_goal_placeholder = tf.placeholder(tf.float32, (nenvs * (nsteps + 1),) + goal_feat_shape, "train_goal")
+                train_goal_placeholder = tf.placeholder(tf.float32, (nenvs*(nsteps+1),)+goal_feat_shape, "train_goal")
 
-            step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder,
-                                goal_placeholder=step_goal_placeholder, sess=sess)
-            train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                 goal_placeholder=train_goal_placeholder, sess=sess)
+            self.step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder,
+                                     goal_placeholder=step_goal_placeholder, sess=self.sess)
+            self.train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
+                                      goal_placeholder=train_goal_placeholder, sess=self.sess)
 
         variables = find_trainable_variables
         params = variables(scope)
@@ -113,34 +113,34 @@ class Model(object):
         # print("========================== Ema =============================")
 
         with tf.variable_scope(scope, custom_getter=custom_getter, reuse=True):
-            polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                  goal_placeholder=train_goal_placeholder, sess=sess)
+            self.polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
+                                       goal_placeholder=train_goal_placeholder, sess=self.sess)
 
         # Notation: (var) = batch variable, (var)s = seqeuence variable, (var)_i = variable index by action at step i
 
-        # action probability distributions according to train_model, polyak_model and step_model
+        # action probability distributions according to self.train_model, self.polyak_model and self.step_model
         # poilcy.pi is probability distribution parameters; to obtain distribution that sums to 1 need to take softmax
-        train_model_p = tf.nn.softmax(train_model.pi)
-        polyak_model_p = tf.nn.softmax(polyak_model.pi)
-        step_model_p = tf.nn.softmax(step_model.pi)
-        v = tf.reduce_sum(train_model_p * train_model.q, axis=-1)  # shape is [nenvs * (nsteps + 1)]
+        train_model_p = tf.nn.softmax(self.train_model.pi)
+        polyak_model_p = tf.nn.softmax(self.polyak_model.pi)
+        self.step_model_p = tf.nn.softmax(self.step_model.pi)
+        v = tf.reduce_sum(train_model_p * self.train_model.q, axis=-1)  # shape is [nenvs * (nsteps + 1)]
 
         # strip off last step
-        f, f_pol, q = map(lambda var: strip(var, nenvs, nsteps), [train_model_p, polyak_model_p, train_model.q])
+        f, f_pol, q = map(lambda var: strip(var, nenvs, nsteps), [train_model_p, polyak_model_p, self.train_model.q])
         # Get pi and q values for actions taken
-        f_i = get_by_index(f, A)
-        q_i = get_by_index(q, A)
+        f_i = get_by_index(f, self.A)
+        q_i = get_by_index(q, self.A)
 
         # Compute ratios for importance truncation
-        rho = f / (MU + eps)
-        rho_i = get_by_index(rho, A)
+        rho = f / (self.MU + eps)
+        rho_i = get_by_index(rho, self.A)
 
         # Calculate Q_retrace targets
-        qret = q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma)
+        qret = q_retrace(self.R, self.D, q_i, v, rho_i, nenvs, nsteps, gamma)
 
         # Calculate losses
         # Entropy
-        # entropy = tf.reduce_mean(strip(train_model.pd.entropy(), nenvs, nsteps))
+        # entropy = tf.reduce_mean(strip(self.train_model.pd.entropy(), nenvs, nsteps))
         entropy = tf.reduce_mean(cat_entropy_softmax(f))
 
         # Policy Graident loss, with truncated importance sampling & bias correction
@@ -180,8 +180,8 @@ class Model(object):
             # k = tf.gradients(KL(f_pol || f), f)
             k = - f_pol / (f + eps)  # [nenvs * nsteps, nact] # Directly computed gradient of KL divergence wrt f
             k_dot_g = tf.reduce_sum(k * g, axis=-1)
-            adj = tf.maximum(0.0, (tf.reduce_sum(k * g, axis=-1) - delta) / (
-            tf.reduce_sum(tf.square(k), axis=-1) + eps))  # [nenvs * nsteps]
+            adj = tf.maximum(0.0, (tf.reduce_sum(k * g, axis=-1) - delta) /
+                             (tf.reduce_sum(tf.square(k), axis=-1) + eps))  # [nenvs * nsteps]
 
             # Calculate stats (before doing adjustment) for logging.
             avg_norm_k = avg_norm(k)
@@ -206,60 +206,58 @@ class Model(object):
         if max_grad_norm is not None:
             grads, norm_grads = tf.clip_by_global_norm(grads, max_grad_norm)
         grads = list(zip(grads, params))
-        trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=rprop_alpha, epsilon=rprop_epsilon)
+        trainer = tf.train.RMSPropOptimizer(learning_rate=self.LR, decay=rprop_alpha, epsilon=rprop_epsilon)
         _policy_opt_op = trainer.apply_gradients(grads)
         if not self.dynamics.dummy:
             _train_dynamics = trainer.minimize(self.dynamics.loss)
+            self.run_ops_dynamics = [_train_dynamics, self.dynamics.aux_loss, self.dynamics.dyna_loss,
+                                     self.dynamics.feat_var]
+            self.name_ops_dynamics = ["aux_loss", "dyna_loss", "goal_feat_var"]
         # so when you call _train, you first do the gradient step, then you apply ema
         with tf.control_dependencies([_policy_opt_op]):
             _train_policy = tf.group(ema_apply_op)
 
-        lr = Scheduler(v=lr, nvalues=total_timesteps, schedule=lrschedule)
+        self.lr = Scheduler(v=lr, nvalues=total_timesteps, schedule=lrschedule)
 
         # Ops/Summaries to run, and their names for logging
-        run_ops_policy = [_train_policy, loss, loss_q, entropy, loss_policy, loss_f, loss_bc, ev, norm_grads]
-        names_ops_policy = ['loss', 'loss_q', 'entropy', 'loss_policy', 'loss_f', 'loss_bc', 'explained_variance',
-                            'norm_grads']
+        self.run_ops_policy = [_train_policy, loss, loss_q, entropy, loss_policy, loss_f, loss_bc, ev, norm_grads]
+        self.names_ops_policy = ['loss', 'loss_q', 'entropy', 'loss_policy', 'loss_f', 'loss_bc', 'explained_variance',
+                                 'norm_grads']
         if trust_region:
-            run_ops_policy = run_ops_policy + [norm_grads_q, norm_grads_policy, avg_norm_grads_f, avg_norm_k,
-                                               avg_norm_g, avg_norm_k_dot_g, avg_norm_adj]
-            names_ops_policy = names_ops_policy + ['norm_grads_q', 'norm_grads_policy', 'avg_norm_grads_f',
-                                                   'avg_norm_k', 'avg_norm_g',
-                                                   'avg_norm_k_dot_g', 'avg_norm_adj']
+            self.run_ops_policy = self.run_ops_policy + [
+                norm_grads_q, norm_grads_policy, avg_norm_grads_f, avg_norm_k, avg_norm_g, avg_norm_k_dot_g,
+                avg_norm_adj]
+            self.names_ops_policy = self.names_ops_policy + [
+                'norm_grads_q', 'norm_grads_policy', 'avg_norm_grads_f', 'avg_norm_k', 'avg_norm_g','avg_norm_k_dot_g',
+                'avg_norm_adj']
+        self.names_ops_policy = [scope+"_"+x for x in self.names_ops_policy]  # scope as prefix
+
+        self.save = functools.partial(save_variables, sess=self.sess, variables=params)
+
+        self.initial_state = self.step_model.initial_state
+        tf.global_variables_initializer().run(session=self.sess)
+    
+    def train_policy(self, obs, actions, rewards, dones, mus, states, masks, steps, goal_feats):
+        cur_lr = self.lr.value_steps(steps)
+        td_map = {self.train_model.X: obs, self.polyak_model.X: obs, self.A: actions, self.R: rewards, self.D: dones,
+                  self.MU: mus, self.LR: cur_lr}
         if not self.dynamics.dummy:
-            run_ops_dynamics = [_train_dynamics, self.dynamics.aux_loss, self.dynamics.dyna_loss,
-                                self.dynamics.feat_var]
-            names_ops_dynamics = ["aux_loss", "dyna_loss", "goal_feat_var"]
-        names_ops_policy = [scope+"_"+x for x in names_ops_policy]  # scope as prefix
+            assert hasattr(self.train_model, "goals")
+            td_map[self.train_model.goals] = goal_feats
+        if states is not None:
+            td_map[self.train_model.S] = states
+            td_map[self.train_model.M] = masks
+            td_map[self.polyak_model.S] = states
+            td_map[self.polyak_model.M] = masks
+        return self.names_ops_policy.copy(), self.sess.run(self.run_ops_policy, td_map)[1:]  # strip off _train
 
-        def train_policy(obs, actions, rewards, dones, mus, states, masks, steps, goal_feats):
-            cur_lr = lr.value_steps(steps)
-            td_map = {train_model.X: obs, polyak_model.X: obs, A: actions, R: rewards, D: dones, MU: mus, LR: cur_lr}
-            if not self.dynamics.dummy:
-                assert hasattr(train_model, "goals")
-                td_map[train_model.goals] = goal_feats
-            if states is not None:
-                td_map[train_model.S] = states
-                td_map[train_model.M] = masks
-                td_map[polyak_model.S] = states
-                td_map[polyak_model.M] = masks
-            return names_ops_policy, sess.run(run_ops_policy, td_map)[1:]  # strip off _train
-
-        def train_dynamics(obs, actions, steps):
-            cur_lr = lr.value_steps(steps)
-            td_map = {self.dynamics.obs: obs[:-1], self.dynamics.next_obs: obs[1:], self.dynamics.ac: actions, LR: cur_lr}
-            return names_ops_dynamics, sess.run(run_ops_dynamics, td_map)[1:]
-
-        def _step(observation, **kwargs):
-            return step_model._evaluate([step_model.action, step_model_p, step_model.state], observation, **kwargs)
-
-        self.train_policy = train_policy
-        self.train_dynamics = train_dynamics  # todo:
-        self.save = functools.partial(save_variables, sess=sess, variables=params)
-        self.train_model = train_model
-        self.step_model = step_model
-        self._step = _step
-        self.step = self.step_model.step
-
-        self.initial_state = step_model.initial_state
-        tf.global_variables_initializer().run(session=sess)
+    def train_dynamics(self, obs, actions, steps):
+        cur_lr = self.lr.value_steps(steps)
+        td_map = {self.dynamics.obs: obs[:-1], self.dynamics.next_obs: obs[1:], self.dynamics.ac: actions,
+                  self.LR: cur_lr}
+        return self.name_ops_dynamics.copy(), self.sess.run(self.run_ops_dynamics, td_map)[1:]
+    
+    def step(self, observation, **kwargs):
+        return self.step_model.evaluate([self.step_model.action, self.step_model_p, self.step_model.state],
+                                        observation, **kwargs)
+        

@@ -48,7 +48,7 @@ class Dynamics:
 
         self.feat = tf.stop_gradient(self.auxiliary_task.feature)
         self.feat_shape = tuple(self.feat.get_shape().as_list()[1:])
-        self.feat_var = tf.reduce_mean(tf.nn.moments(self.feat, [0, 1])[1])
+        self.feat_var = tf.reduce_mean(tf.nn.moments(self.feat, axes=-1)[1])
         self.out_feat = tf.stop_gradient(self.auxiliary_task.next_feature)
 
         with tf.variable_scope("dynamics"):
