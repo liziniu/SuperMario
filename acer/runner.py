@@ -6,6 +6,7 @@ from common.util import DataRecorder, ResultsWriter
 import time
 import os
 from queue import deque
+from baselines import logger
 
 
 class Runner(AbstractEnvRunner):
@@ -48,13 +49,18 @@ class Runner(AbstractEnvRunner):
     def run(self):
         if self.goal_feat is None:
             self.goal_feat, self.goal_obs, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
+            for env_idx in range(self.nenv):
+                goal_info = self.goal_info[env_idx]
+                if goal_info:
+                    logger.info("env:{}|current goal pos:{} |goal queue size:{}".format(
+                        env_idx, goal_info, self.dynamics.queue.qsize()))
         # enc_obs = np.split(self.obs, self.nstack, axis=3)  # so now list of obs steps
         enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
         mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
-        mb_obs_feats, mb_goal_obs = [], []
+        mb_obs_feats, mb_goal_obs, mb_goal_infos = [], [], []
         reached_step = np.zeros(self.nenv, dtype=np.int32)
 
-        mb_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
+        reached_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
             actions[self.reached_status] = self.simple_random_action()
@@ -69,6 +75,9 @@ class Runner(AbstractEnvRunner):
             obs, rewards, dones, infos = self.env.step(actions)
             obs_feat = self.dynamics.extract_feature(obs)
             mb_obs_feats.append(obs_feat)
+            goal_infos = [{"x_pos": info.get("x_pos", None),
+                           "y_pos": info.get("y_pos", None)} for info in infos]
+            mb_goal_infos.append(goal_infos)
             
             for env_idx in range(self.nenv):
                 if not self.reached_status[env_idx]:
@@ -100,16 +109,28 @@ class Runner(AbstractEnvRunner):
                 )
                 self.recorder.store(data)
                 self.episode_step[env_idx] += 1
-                if info.get("episode"):
-                    assert self.dones[env_idx]
-                    self.goal_feat, self.goal_obs, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
+                if self.dones[env_idx]:
+                    # summary
                     if self.reached_status[env_idx]:
                         reached = 1.0
                         time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]
                     else:
                         reached = 0.0
                         time_ratio = 1.0
-                    mb_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio)
+                    reached_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio)
+                    reached_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
+                                                               y_pos=self.goal_info[env_idx]["y_pos"])
+                    if info.get("episode"):
+                        reached_infos[env_idx]["episode"] = info.get("episode")
+
+                    # re-plan goal
+                    goal_feat, goal_obs, goal_info = self.dynamics.get_goal(nb_goal=1)
+                    self.goal_feat[env_idx] = goal_feat[0]
+                    self.goal_obs[env_idx] = goal_obs[0]
+                    self.goal_info[env_idx] = goal_info[0]
+                    if self.goal_info[env_idx]:
+                        logger.info("env:{}|current goal pos:{}|goal queue size:{}".format(
+                            env_idx, self.goal_info[env_idx], self.dynamics.queue.qsize()))
                     self.episode[env_idx] += 1
                     self.episode_step[env_idx] = 0
                     self.episode_reached_step[env_idx] = 0
@@ -133,6 +154,7 @@ class Runner(AbstractEnvRunner):
         mb_dones = mb_dones[:, 1:] # Used for calculating returns. The dones array is now aligned with rewards
         mb_goal_obs = np.asarray(mb_goal_obs, dtype=np.float32).swapaxes(1, 0)
         mb_obs_feats = np.asarray(mb_obs_feats, dtype=np.float32).swapaxes(1, 0)
+        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
 
         # adjust goals from the time of acting randomly
         for env_idx in range(self.nenv):
@@ -143,19 +165,21 @@ class Runner(AbstractEnvRunner):
         mb_goal_obs_flatten = np.reshape(mb_goal_obs, (-1, ) + mb_goal_obs.shape[2:])   # flatten nenv and nstep
         mb_goal_feats = self.dynamics.extract_feature(mb_goal_obs_flatten)
         mb_obs_feats_flatten = np.reshape(mb_obs_feats, (-1, ) + mb_obs_feats.shape[2:])  # flatten nenv and nstep
-        mb_int_rewards = self.reward_fn(mb_obs_feats_flatten, mb_goal_feats)[:-1]       # strip the last reward
-        
+        mb_int_rewards = self.reward_fn(mb_obs_feats_flatten, mb_goal_feats)
+        mb_int_rewards = mb_int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
+
         return enc_obs, mb_obs, mb_actions, mb_ext_rewards, mb_mus, mb_dones, mb_masks,\
-               mb_goal_obs, mb_goal_feats, mb_int_rewards, mb_infos
+               mb_goal_obs, mb_goal_feats, mb_int_rewards, mb_goal_infos, reached_infos
 
     def check_goal_reached(self, obs_feat, desired_goal):
         assert obs_feat.shape == desired_goal.shape
+        assert len(obs_feat.shape) == 1
         if self.dynamics.dummy:
             return False
         else:
-            eps = 1e-4
+            eps = 1e-6
             tol = 0.05
-            status = np.square(obs_feat - desired_goal).mean() / (np.square(desired_goal).mean() + eps) < tol
+            status = (np.square(obs_feat - desired_goal).sum() / (np.square(desired_goal).sum() + eps)) < tol
             return status
 
     def simple_random_action(self):
@@ -166,50 +190,54 @@ class Runner(AbstractEnvRunner):
         return 1/self.env.action_space.n
 
     def initialize(self, init_steps):
-        mb_obs, mb_actions, mb_next_obs, mb_infos = [], [], [], []
+        mb_obs, mb_actions, mb_next_obs, mb_goal_infos = [], [], [], []
         for _ in range(init_steps):
             mb_obs.append(np.copy(self.obs))
             actions = np.asarray([self.env.action_space.sample() for _ in range(self.nenv)])
             self.obs, rewards, dones, infos = self.env.step(actions)
-            obs_info = [{"x_pos": info.get("x_pos", None), "y_pos": info.get("y_pos", None)} for info in infos]
-            mb_infos.append(obs_info)
+            goal_infos = [{"x_pos": info.get("x_pos", None),
+                           "y_pos": info.get("y_pos", None)} for info in infos]
+            mb_goal_infos.append(goal_infos)
             mb_actions.append(actions)
             mb_next_obs.append(np.copy(self.obs))
         self.obs = self.env.reset()
         mb_obs = np.asarray(mb_obs).swapaxes(1, 0)      # (nenv, nstep, obs_shape)
-        mb_infos = np.asarray(mb_infos, dtype=object).swapaxes(1, 0)    # (nenv, nstep, dict)
+        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)    # (nenv, nstep, dict)
         mb_actions = np.asarray(mb_actions).swapaxes(1, 0)
         mb_next_obs = np.asarray(mb_next_obs).swapaxes(1, 0)
 
         mb_obs = mb_obs.reshape((-1, ) + mb_obs.shape[2:])
-        mb_infos = mb_infos.reshape(-1, )
+        mb_goal_infos = mb_goal_infos.reshape(-1, )
         mb_actions = mb_actions.reshape((-1, ) + mb_actions.shape[2:])
         mb_next_obs = mb_next_obs.reshape((-1, ) + mb_next_obs.shape[2:])
-        return mb_obs, mb_actions, mb_next_obs, mb_infos
+        return mb_obs, mb_actions, mb_next_obs, mb_goal_infos
 
     def evaluate(self, nb_eval):
         assert self.dynamics.dummy
         assert self.nenv == 1
         self.goal_feat, goal_obs, goal_info = self.dynamics.get_goal(nb_goal=self.nenv)  # (nenv, goal_dim)
-        tstart = time.time()
-        episode_return = []
-        episode_length = []
+        eval_info = {"l": 0, "r": 0}
         for i in range(nb_eval):
-            step = 0
-            ret = 0
             while True:
-                actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
-                obs, rewards, dones, infos = self.env.step(actions)
-                ret += rewards[0]
+                obs_ = np.tile(np.copy(self.obs), [self.model.nenv, ] + [1]*len(self.obs.shape[1:]))
+                if self.states:
+                    states_ = np.tile(np.copy(self.states), [self.model.nenv, ] + [1]*len(self.states.shape[1:]))
+                else:
+                    states_ = None
+                dones_ = np.tile(np.copy(self.dones), [self.model.nenv] + [1]*len(np.array(self.dones).shape[1:]))
+                actions, mus, states = self.model.step(obs_, S=states_, M=dones_, goals=self.goal_feat)
+                obs, rewards, dones, infos = self.env.step(actions[0])
+                done = dones[0]
                 info = infos[0]
-                step += 1
                 if info.get("episode"):
+                    assert done
+                    eval_info["l"] += info.get("episode")["l"]
+                    eval_info["r"] += info.get("episode")["r"]
                     break
-            self.lenbuffer.append(step)
-            self.rewbuffer.append(ret)
-            episode_length.append(step)
-            episode_return.append(ret)
-
-        eval_info = {"l": np.mean(episode_length), "r": np.mean(episode_return), "t":time.time()-tstart}
+                self.states = states
+                self.dones = dones
+                self.obs = obs
+        eval_info["l"] /= nb_eval
+        eval_info["r"] /= nb_eval
         self.results_writer.write_row(eval_info)
-        return eval_info["r"], eval_info["l"]
+        return eval_info

@@ -53,8 +53,8 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 class Model(object):
     def __init__(self, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
                  rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope):
-
         self.sess = get_session()
+        self.nenv = nenvs
         nact = ac_space.n
         nbatch = nenvs * nsteps
         eps = 1e-6
@@ -251,9 +251,9 @@ class Model(object):
             td_map[self.polyak_model.M] = masks
         return self.names_ops_policy.copy(), self.sess.run(self.run_ops_policy, td_map)[1:]  # strip off _train
 
-    def train_dynamics(self, obs, actions, steps):
+    def train_dynamics(self, obs, actions, next_obs, steps):
         cur_lr = self.lr.value_steps(steps)
-        td_map = {self.dynamics.obs: obs[:-1], self.dynamics.next_obs: obs[1:], self.dynamics.ac: actions,
+        td_map = {self.dynamics.obs: obs, self.dynamics.next_obs: next_obs, self.dynamics.ac: actions,
                   self.LR: cur_lr}
         return self.name_ops_dynamics.copy(), self.sess.run(self.run_ops_dynamics, td_map)[1:]
     

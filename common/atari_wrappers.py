@@ -36,7 +36,7 @@ class NoopResetEnv(gym.Wrapper):
         return obs
 
     def step(self, ac):
-        return self.env.step(ac)
+         return self.env.step(ac)
 
 class FireResetEnv(gym.Wrapper):
     def __init__(self, env):

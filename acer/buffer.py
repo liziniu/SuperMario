@@ -1,4 +1,5 @@
 import numpy as np
+from queue import PriorityQueue
 
 
 class Buffer(object):
@@ -112,7 +113,8 @@ class Buffer(object):
         goal_feat = self.dynamics.extract_feature(goal_obs_flatten)
         obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
         obs_feat = self.dynamics.extract_feature(obs_flatten)
-        int_rewards = self.reward_fn(obs_feat, goal_feat)[:-1]     # strip the last rewards
+        int_rewards = self.reward_fn(obs_feat, goal_feat)
+        int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
 
         return obs, actions, ext_rewards, mus, dones, masks, goal_feat, int_rewards
 
@@ -161,6 +163,7 @@ def _stack_obs(enc_obs, dones, nsteps):
             mask[:, 1:, ...] *= mask[:, :-1, ...]
 
     return obs_
+
 
 def test_stack_obs():
     nstack = 7

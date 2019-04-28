@@ -5,6 +5,7 @@ import os
 import pickle
 import csv
 import json
+from collections import deque
 
 
 def conv(x, scope, *, nf, rf, stride, pad='VALID', init_scale=1.0, data_format='NHWC', one_dim_bias=False, reuse=False):
@@ -116,3 +117,28 @@ class DataRecorder:
         with open(os.path.join(self.path, "data.pkl"), "ab+") as f:
             pickle.dump(self.memory, f, -1)
         self.memory = []
+
+
+class EpisodeStats:
+    def __init__(self, maxlen, keys):
+        self.maxlen = maxlen
+        self.keys = keys
+        self.episode_stats = {key: deque(maxlen=maxlen) for key in keys}
+
+    def feed(self, data, key):
+        if key not in self.keys:
+            self.keys.append(key)
+            self.episode_stats[key] = deque(self.maxlen)
+        self.episode_stats[key].append(data)
+
+    def get_mean(self, key):
+        if self.episode_stats[key]:
+            return np.round(np.mean(self.episode_stats[key]), 4)
+        else:
+            return 0.
+
+    def get_sum(self, key):
+        if self.episode_stats[key]:
+            return np.round(np.sum(self.episode_stats[key]), 4)
+        else:
+            return 0.

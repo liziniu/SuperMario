@@ -107,16 +107,25 @@ class Dynamics:
         assert list(obs.shape)[1:] == self.auxiliary_task.obs.get_shape().as_list()[1:], "obs's shape:{} is wrong".format(obs.shape)
         return self.sess.run(self.feat, feed_dict={self.auxiliary_task.obs: obs})
 
-    def put_goal(self, obs, actions, next_obs, info):
+    def put_goal(self, obs, actions, next_obs, goal_infos):
         assert list(obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "obs shape:{}.please flatten obs".format(obs.shape)
         assert list(actions.shape)[1:] == self.ac.get_shape().as_list()[1:], "action shape:{}.please flatten actions".format(actions.shape)
         assert list(next_obs.shape)[1:] == self.next_obs.get_shape().as_list()[1:], "next obs shape:{}.please flatten obs".format(next_obs.shape)
-        assert len(info.shape) == 1, "info shape:{}".format(info.shape)
+        assert len(goal_infos.shape) == 1, "info shape:{}".format(goal_infos.shape)
         priority = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
+        # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
+        priority = - (priority - priority.mean()) / (priority.std() + 1e-6)
+        baseline = np.quantile(priority, 0.8)
         for i in range(len(obs)):
-            data = (priority[i], time.time(), obs[i], info[i])
-            # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
-            self.queue.put(data)  # tge
+            if self.queue.qsize() < self.queue.maxsize // 10:
+                data = (priority[i], time.time(), obs[i], goal_infos[i])
+                self.queue.put(data)
+            else:
+                if priority[i] >= baseline:
+                    data = (priority[i], time.time(), obs[i], goal_infos[i])
+                    if self.queue.full():
+                        self.queue.queue.pop()
+                    self.queue.put(data)
 
     def get_goal(self, nb_goal):
         assert self.queue.qsize() >= nb_goal
