@@ -101,8 +101,8 @@ class Acer:
                 logger.record_tabular("expl_return", self.episode_stats.get_mean("expl_return"))
                 logger.record_tabular("eval_length", self.episode_stats.get_mean("eval_length"))
                 logger.record_tabular("eval_return", self.episode_stats.get_mean("eval_return"))
-                logger.record_tabular("goal_pos_desired", [self.episode_stats.get_mean("expl_x_pos"),
-                                                           self.episode_stats.get_mean("expl_y_pos")])
+                logger.record_tabular("goal_pos_x", self.episode_stats.get_mean("expl_x_pos"))
+                logger.record_tabular("goal_pos_y", self.episode_stats.get_mean("expl_y_pos"))
                 if not self.model.dynamics.dummy:
                     logger.record_tabular("reached_ratio", self.episode_stats.get_sum("reached_cnt")/self.episode_stats.maxlen)
                     logger.record_tabular("reached_time", self.episode_stats.get_mean("reached_time"))

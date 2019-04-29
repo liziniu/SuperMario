@@ -115,16 +115,19 @@ class Dynamics:
         priority = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
         # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
         priority = - (priority - priority.mean()) / (priority.std() + 1e-6)
-        baseline = np.quantile(priority, 0.8)
+        baseline = None
         for i in range(len(obs)):
             if self.queue.qsize() < self.queue.maxsize // 10:
                 data = (priority[i], time.time(), obs[i], goal_infos[i])
                 self.queue.put(data)
             else:
-                if priority[i] >= baseline:
+                if baseline is None:
+                    baseline = 0.8 * np.min([item[0] for item in self.queue.queue])
+                if priority[i] < baseline:
                     data = (priority[i], time.time(), obs[i], goal_infos[i])
                     if self.queue.full():
-                        self.queue.queue.pop()
+                        maxvalue_idx = np.argmax([item[0] for item in self.queue.queue])
+                        self.queue.queue.pop(maxvalue_idx)
                     self.queue.put(data)
 
     def get_goal(self, nb_goal):
