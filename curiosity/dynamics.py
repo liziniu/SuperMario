@@ -5,6 +5,8 @@ from common.util import fc
 from curiosity.auxilliary_tasks import RandomFeature, InverseDynamics, RandomNetworkDistillation
 import numpy as np
 import time
+from baselines.common.mpi_running_mean_std import RunningMeanStd
+import baselines.common.tf_util as U
 
 
 class DummyDynamics:
@@ -52,6 +54,7 @@ class Dynamics:
         self.out_feat = tf.stop_gradient(self.auxiliary_task.next_feature)
 
         with tf.variable_scope("dynamics"):
+            self.novelty_tf = tf.placeholder(tf.float32, [None], "novelty_placeholder")
             if isinstance(self.auxiliary_task, RandomNetworkDistillation):
                 self.dyna_loss = tf.zeros([])
             elif isinstance(self.auxiliary_task, InverseDynamics) or isinstance(self.auxiliary_task, RandomFeature):
@@ -69,6 +72,9 @@ class Dynamics:
         self.loss = self.aux_loss + self.dyna_loss
 
         self.queue = PriorityQueue(queue_size)
+        self.novelty_rms = RunningMeanStd(epsilon=1e-4)
+        self.novelty_normalized = tf.clip_by_value((self.novelty_tf-self.novelty_rms.mean)/self.novelty_rms.std,
+                                                   -5., 5.)
 
     def _get_novelty(self):
         if isinstance(self.ac_space, spaces.Box):
@@ -112,9 +118,12 @@ class Dynamics:
         assert list(actions.shape)[1:] == self.ac.get_shape().as_list()[1:], "action shape:{}.please flatten actions".format(actions.shape)
         assert list(next_obs.shape)[1:] == self.next_obs.get_shape().as_list()[1:], "next obs shape:{}.please flatten obs".format(next_obs.shape)
         assert len(goal_infos.shape) == 1, "info shape:{}".format(goal_infos.shape)
-        priority = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
+
         # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
-        priority = - (priority - priority.mean()) / (priority.std() + 1e-6)
+        # self.novelty_rms.update(priority)
+        novelty = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
+        self.novelty_rms.update(novelty)
+        priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
         baseline = None
         for i in range(len(obs)):
             if self.queue.qsize() < self.queue.maxsize // 10:
@@ -143,17 +152,27 @@ class Dynamics:
         return goal_feat, goal_obs, goal_info
 
 if __name__ == "__main__":
-    from common.cmd_util import make_atari
-    env = make_atari("SuperMarioBros-v0")
-    sess = tf.Session()
-    auxiliary_task = "RF"
-    queue_size = 5000
-    feat_dim = 512
-    nb_goal = 5
-    if auxiliary_task is None:
-        dynamics = DummyDynamics()
-    else:
-        dynamics = Dynamics(sess, env, auxiliary_task, queue_size, feat_dim)
-    for var in dynamics.params:
-        print(var)
-    print(dynamics.get_goal(nb_goal))
+    # from common.env_util import make_atari
+    # env = make_atari("SuperMarioBros-v0")
+    # sess = tf.Session()
+    # auxiliary_task = "RF"
+    # queue_size = 5000
+    # feat_dim = 512
+    # nb_goal = 5
+    # if auxiliary_task is None:
+    #     dynamics = DummyDynamics()
+    # else:
+    #     dynamics = Dynamics(sess, env, auxiliary_task, queue_size, feat_dim)
+    # for var in dynamics.params:
+    #     print(var)
+    # print(dynamics.get_goal(nb_goal))
+    import baselines.common.tf_util as U
+    @U.in_session
+    def test():
+        rms = RunningMeanStd(epsilon=1e-4)
+        U.initialize()
+        p = np.random.poisson(4, [100])
+        rms.update(p)
+        print(U.get_session().run(p - rms.mean) / rms.std)
+
+    test()
