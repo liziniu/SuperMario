@@ -69,7 +69,7 @@ def train(args, extra_args):
     if args.save_video_interval != 0:
         env = VecVideoRecorder(env, osp.join(logger.get_dir(), "videos"), record_video_trigger=lambda x: x % args.save_video_interval == 0, video_length=args.save_video_length)
     env_eval = build_env(env_id=args.env, num_env=args.num_env, reward_scale=args.reward_scale, env_type=args.env_type,
-                         gamestate=args.gamestate, seed=args.seed, alg=args.alg, monitor_first_name="evaluation")
+                         gamestate=args.gamestate, seed=args.seed, alg=args.alg, prefix="evaluation")
     if args.network:
         alg_kwargs['network'] = args.network
     else:
