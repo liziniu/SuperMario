@@ -52,6 +52,7 @@ class Dynamics:
         self.feat_shape = tuple(self.feat.get_shape().as_list()[1:])
         self.feat_var = tf.reduce_mean(tf.nn.moments(self.feat, axes=-1)[1])
         self.out_feat = tf.stop_gradient(self.auxiliary_task.next_feature)
+        self.nenv = env.num_envs if hasattr(env, 'num_envs') else 1
 
         with tf.variable_scope("dynamics"):
             self.novelty_tf = tf.placeholder(tf.float32, [None], "novelty_placeholder")
@@ -126,12 +127,12 @@ class Dynamics:
         priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
         baseline = None
         for i in range(len(obs)):
-            if self.queue.qsize() < self.queue.maxsize // 10:
+            if self.queue.qsize() < self.nenv * 5:
                 data = (priority[i], time.time(), obs[i], goal_infos[i])
                 self.queue.put(data)
             else:
                 if baseline is None:
-                    baseline = 0.8 * np.min([item[0] for item in self.queue.queue])
+                    baseline = np.median([item[0] for item in self.queue.queue])
                 if priority[i] < baseline:
                     data = (priority[i], time.time(), obs[i], goal_infos[i])
                     if self.queue.full():

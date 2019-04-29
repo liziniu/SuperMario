@@ -7,14 +7,13 @@ from collections import defaultdict
 from importlib import import_module
 import gym
 import numpy as np
-import tensorflow as tf
 from baselines import logger
 from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
 from curiosity.dynamics import DummyDynamics, Dynamics
 from common.cmd_util import common_arg_parser, parse_unknown_args
-from common.env_util import make_vec_env, make_env
+from common.env_util import build_env
 
 try:
     from mpi4py import MPI
@@ -64,10 +63,13 @@ def train(args, extra_args):
     alg_kwargs.update(extra_args)
     alg_kwargs.pop("save_path")
 
-    env = build_env(args)
+    env = build_env(env_id=args.env, num_env=args.num_env, reward_scale=args.reward_scale, env_type=args.env_type,
+                    gamestate=args.gamestate, seed=args.seed, alg=args.alg)
+
     if args.save_video_interval != 0:
         env = VecVideoRecorder(env, osp.join(logger.get_dir(), "videos"), record_video_trigger=lambda x: x % args.save_video_interval == 0, video_length=args.save_video_length)
-
+    env_eval = build_env(env_id=args.env, num_env=args.num_env, reward_scale=args.reward_scale, env_type=args.env_type,
+                         gamestate=args.gamestate, seed=args.seed, alg=args.alg, monitor_first_name="evaluation")
     if args.network:
         alg_kwargs['network'] = args.network
     else:
@@ -92,45 +94,11 @@ def train(args, extra_args):
         save_path=extra_args["save_path"],
         store_data=args.store_data,
         dynamics=dynamics,
+        env_eval=env_eval,
         **alg_kwargs
     )
 
     return model, env
-
-
-def build_env(args):
-    ncpu = multiprocessing.cpu_count()
-    if sys.platform == 'darwin': ncpu //= 2
-    nenv = args.num_env or ncpu
-    alg = args.alg
-    seed = args.seed
-
-    env_type, env_id = get_env_type(args)
-
-    if env_type in {'atari', 'retro'}:
-        if alg == 'deepq':
-            env = make_env(env_id, env_type, seed=seed, wrapper_kwargs={'frame_stack': True})
-        elif alg == 'trpo_mpi':
-            env = make_env(env_id, env_type, seed=seed)
-        else:
-            frame_stack_size = 4
-            env = make_vec_env(env_id, env_type, nenv, seed, gamestate=args.gamestate, reward_scale=args.reward_scale)
-            env = VecFrameStack(env, frame_stack_size)
-
-    else:
-        config = tf.ConfigProto(allow_soft_placement=True,
-                               intra_op_parallelism_threads=1,
-                               inter_op_parallelism_threads=1)
-        config.gpu_options.allow_growth = True
-        get_session(config=config)
-
-        flatten_dict_observations = alg not in {'her'}
-        env = make_vec_env(env_id, env_type, args.num_env or 1, seed, reward_scale=args.reward_scale, flatten_dict_observations=flatten_dict_observations)
-
-        if env_type == 'mujoco':
-            env = VecNormalize(env)
-
-    return env
 
 
 def get_env_type(args):

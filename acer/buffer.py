@@ -4,7 +4,7 @@ from queue import PriorityQueue
 
 class Buffer(object):
     # gets obs, actions, rewards, mu's, (states, masks), dones
-    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, size=50000):
+    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, with_goal, nsteps, size=50000):
         self.nenv = env.num_envs
         self.nsteps = nsteps
         assert callable(sample_goal_fn)
@@ -12,7 +12,8 @@ class Buffer(object):
         self.sample_goal_fn = sample_goal_fn
         self.dynamics = dynamics
         self.reward_fn = reward_fn
-        assert hasattr(self.dynamics, "extract_feature")
+        if with_goal:
+            assert hasattr(self.dynamics, "extract_feature")
         # self.nh, self.nw, self.nc = env.observation_space.shape
         self.obs_shape = env.observation_space.shape
         self.obs_dtype = env.observation_space.dtype
@@ -23,6 +24,7 @@ class Buffer(object):
         self.nbatch = self.nenv * self.nsteps
         self.size = size // (self.nsteps)  # Each loc contains nenv * nsteps frames, thus total buffer is nenv * size frames
 
+        self.with_goal = with_goal
         # Memory
         self.enc_obs = None
         self.actions = None
@@ -30,7 +32,8 @@ class Buffer(object):
         self.mus = None
         self.dones = None
         self.masks = None
-        self.goal_obs = None
+        if self.with_goal:
+            self.goal_obs = None
         # Size indexes
         self.next_idx = 0
         self.num_in_buffer = 0
@@ -52,7 +55,7 @@ class Buffer(object):
         return _stack_obs(enc_obs, dones,
                           nsteps=self.nsteps)
 
-    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs):
+    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs=None):
         # enc_obs [nenv, (nsteps + nstack), nh, nw, nc]
         # actions, rewards, dones [nenv, nsteps]
         # mus [nenv, nsteps, nact]
@@ -64,7 +67,9 @@ class Buffer(object):
             self.mus = np.empty([self.size] + list(mus.shape), dtype=np.float32)
             self.dones = np.empty([self.size] + list(dones.shape), dtype=np.bool)
             self.masks = np.empty([self.size] + list(masks.shape), dtype=np.bool)
-            self.goal_obs = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
+            if self.with_goal:
+                assert goal_obs is not None
+                self.goal_obs = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
 
         self.enc_obs[self.next_idx] = enc_obs
         self.actions[self.next_idx] = actions
@@ -72,7 +77,8 @@ class Buffer(object):
         self.mus[self.next_idx] = mus
         self.dones[self.next_idx] = dones
         self.masks[self.next_idx] = masks
-        self.goal_obs[self.next_idx] = goal_obs
+        if self.with_goal:
+            self.goal_obs[self.next_idx] = goal_obs
 
         self.next_idx = (self.next_idx + 1) % self.size
         self.num_in_buffer = min(self.size, self.num_in_buffer + 1)
@@ -106,19 +112,24 @@ class Buffer(object):
         mus = take(self.mus)
         masks = take(self.masks)
 
-        goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
-        goal_obs = self.sample_goal_fn(goal_obs)
+        results = dict(obs=obs, actions=actions, ext_rewards=ext_rewards, mus=mus, dones=dones, masks=masks)
+        if self.with_goal:
+            goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
+            goal_obs = self.sample_goal_fn(goal_obs)
 
-        goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
-        goal_feat = self.dynamics.extract_feature(goal_obs_flatten)
-        obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
-        obs_feat = self.dynamics.extract_feature(obs_flatten)
-        int_rewards = self.reward_fn(obs_feat, goal_feat)
-        int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
+            goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
+            goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
+            obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
+            obs_feat = self.dynamics.extract_feature(obs_flatten)
+            int_rewards = self.reward_fn(obs_feat, goal_feats)
+            int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
 
-        return obs, actions, ext_rewards, mus, dones, masks, goal_feat, int_rewards
+            results["goal_feats"] = goal_feats
+            results["int_rewards"] = int_rewards
+        return results
 
     def initialize(self, obs, actions, next_obs, info):
+        assert not self.dynamics.dummy
         self.dynamics.put_goal(obs, actions, next_obs, info)
 
 

@@ -10,7 +10,7 @@ from baselines import logger
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, env, model, nsteps, save_path, store_data, reward_fn):
+    def __init__(self, env, model, nsteps, save_path, store_data, reward_fn, sample_goal):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space, spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
         assert isinstance(env, VecFrameStack)
@@ -32,12 +32,12 @@ class Runner(AbstractEnvRunner):
         self.max_store_length = int(3e4)
 
         self.dynamics = self.model.dynamics
+        self.sample_goal = sample_goal
         # self.batch_goal_feat_shape = (nenv*(nsteps+1),) + env.observation_space.shape + self.dynamics.feat_shape
         self.reached_status = np.array([False for _ in range(self.nenv)], dtype=bool)
         self.goal_feat, self.goal_obs, self.goal_info = None, None, None
         self.reward_fn = reward_fn
-        # assert self.nsteps == self.env._max_episode_steps
-        self.results_writer = ResultsWriter(os.path.join(save_path, "evaluation.csv"))
+        # self.results_writer = ResultsWriter(os.path.join(save_path, "evaluation.csv"))
 
         self.lenbuffer = deque(maxlen=40)  # rolling buffer for eval episode lengths
         self.rewbuffer = deque(maxlen=40)  # rolling buffer for eval episode rewards
@@ -46,21 +46,24 @@ class Runner(AbstractEnvRunner):
         self.episode_step = np.zeros(self.nenv)
         self.episode_reached_step = np.zeros(self.nenv)
 
+        self.name = self.model.scope
+
     def run(self):
         if self.goal_feat is None:
             self.goal_feat, self.goal_obs, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
-            for env_idx in range(self.nenv):
-                goal_info = self.goal_info[env_idx]
-                if goal_info:
-                    logger.info("env:{}|current goal pos:{} |goal queue size:{}".format(
-                        env_idx, goal_info, self.dynamics.queue.qsize()))
+            if self.sample_goal:
+                for env_idx in range(self.nenv):
+                    goal_info = self.goal_info[env_idx]
+                    if goal_info:
+                        logger.info("{}_env_{}|pos:{}|size:{}".format(
+                            self.name, env_idx, goal_info, self.dynamics.queue.qsize()))
         # enc_obs = np.split(self.obs, self.nstack, axis=3)  # so now list of obs steps
         enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
         mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
         mb_obs_feats, mb_goal_obs, mb_goal_infos = [], [], []
         reached_step = np.zeros(self.nenv, dtype=np.int32)
 
-        reached_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
+        episode_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
             actions[self.reached_status] = self.simple_random_action()
@@ -70,78 +73,90 @@ class Runner(AbstractEnvRunner):
             mb_actions.append(actions)
             mb_mus.append(mus)
             mb_dones.append(self.dones)
-            mb_goal_obs.append(np.copy(self.goal_obs))
             
             obs, rewards, dones, infos = self.env.step(actions)
-            obs_feat = self.dynamics.extract_feature(obs)
-            mb_obs_feats.append(obs_feat)
+            # evaluation model can also generate useful novel states.
             goal_infos = [{"x_pos": info.get("x_pos", None),
                            "y_pos": info.get("y_pos", None)} for info in infos]
             mb_goal_infos.append(goal_infos)
-            
-            for env_idx in range(self.nenv):
-                if not self.reached_status[env_idx]:
-                    self.reached_status[env_idx] = self.check_goal_reached(obs_feat[env_idx], self.goal_feat[env_idx])
-                    if self.reached_status[env_idx]:
-                        reached_step[env_idx] = step
-                        self.episode_reached_step[env_idx] = step
+            mb_goal_obs.append(np.copy(self.goal_obs))
+            if self.sample_goal:
+                obs_feat = self.dynamics.extract_feature(obs)
+                mb_obs_feats.append(obs_feat)
+                # check reached based on obs_feat and goal_feat
+                for env_idx in range(self.nenv):
+                    if not self.reached_status[env_idx]:
+                        self.reached_status[env_idx] = self.check_goal_reached(obs_feat[env_idx], self.goal_feat[env_idx])
+                        if self.reached_status[env_idx]:
+                            reached_step[env_idx] = step
+                            self.episode_reached_step[env_idx] = np.copy(self.episode_step[env_idx])
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
             self.obs = obs
             mb_ext_rewards.append(rewards)
             enc_obs.append(obs[..., -self.nc:])
-            
-            # store data for visualize or debug
-            for env_idx in range(self.nenv):
-                info = infos[env_idx]
-                data = dict(
-                    x_pos=info.get("x_pos", None),
-                    y_pos=info.get("y_pos", None),
-                    goal_x_pos=self.goal_info[env_idx].get("x_pos", None),
-                    goal_y_pos=self.goal_info[env_idx].get("y_pos", None),
-                    episode=self.episode[env_idx],
-                    timestep=self.episode_step[env_idx],
-                    reached_status=self.reached_status[env_idx],
-                    reward=rewards[env_idx],
-                    env_id=env_idx,
-                    act=actions[env_idx]
-                )
-                self.recorder.store(data)
-                self.episode_step[env_idx] += 1
-                if self.dones[env_idx]:
-                    # summary
-                    if self.reached_status[env_idx]:
-                        reached = 1.0
-                        time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]
-                    else:
-                        reached = 0.0
-                        time_ratio = 1.0
-                    reached_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio)
-                    reached_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
-                                                               y_pos=self.goal_info[env_idx]["y_pos"])
-                    if info.get("episode"):
-                        reached_infos[env_idx]["episode"] = info.get("episode")
 
-                    # re-plan goal
-                    goal_feat, goal_obs, goal_info = self.dynamics.get_goal(nb_goal=1)
-                    self.goal_feat[env_idx] = goal_feat[0]
-                    self.goal_obs[env_idx] = goal_obs[0]
-                    self.goal_info[env_idx] = goal_info[0]
-                    if self.goal_info[env_idx]:
-                        logger.info("env:{}|current goal pos:{}|goal queue size:{}".format(
-                            env_idx, self.goal_info[env_idx], self.dynamics.queue.qsize()))
-                    self.episode[env_idx] += 1
-                    self.episode_step[env_idx] = 0
-                    self.episode_reached_step[env_idx] = 0
-                    self.reached_status[:] = False
-                    self.recorder.dump()
+            for env_idx in range(self.nenv):
+                # store data for visualize
+                info = infos[env_idx]
+                if self.store_data:
+                    data = dict(
+                        x_pos=info.get("x_pos", None),
+                        y_pos=info.get("y_pos", None),
+                        episode=self.episode[env_idx],
+                        timestep=self.episode_step[env_idx],
+                        reward=rewards[env_idx],
+                        env_id=env_idx,
+                        act=actions[env_idx]
+                    )
+                    self.recorder.store(data)
+                self.episode_step[env_idx] += 1
+                # summary
+                if self.dones[env_idx]:
+                    if info.get("episode"):
+                        episode_infos[env_idx]["episode"] = info.get("episode")
+                    if self.store_data:
+                        self.recorder.dump()
+                    if self.sample_goal:
+                        if self.reached_status[env_idx]:
+                            reached = 1.0
+                            time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]
+                        else:
+                            reached = 0.0
+                            time_ratio = 1.0
+                        episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio)
+                        episode_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
+                                                                   y_pos=self.goal_info[env_idx]["y_pos"])
+                        # re-plan goal
+                        goal_feat, goal_obs, goal_info = self.dynamics.get_goal(nb_goal=1)
+                        self.goal_feat[env_idx] = goal_feat[0]
+                        self.goal_obs[env_idx] = goal_obs[0]
+                        self.goal_info[env_idx] = goal_info[0]
+                        if self.goal_info[env_idx]:
+                            logger.info("{}_env:{}|current goal pos:{}|goal queue size:{}".format(
+                                self.name, env_idx, self.goal_info[env_idx], self.dynamics.queue.qsize()))
+                        self.episode[env_idx] += 1
+                        self.episode_step[env_idx] = 0
+                        self.episode_reached_step[env_idx] = 0
+                        self.reached_status[env_idx] = False
         mb_obs.append(np.copy(self.obs))
         mb_dones.append(self.dones)
-        # make dimension is true. we use this additional goal to retrace q value.
-        mb_goal_obs.append(np.copy(self.goal_obs))
-        obs_feat = self.dynamics.extract_feature(np.copy(self.obs))
-        mb_obs_feats.append(obs_feat)
+        mb_goal_obs.append(np.copy(self.goal_obs)) # make dimension is true. we use this to retrace q value.
+        mb_goal_obs = np.asarray(mb_goal_obs, dtype=np.float32).swapaxes(1, 0)
+
+        # evaluation model can also generate useful novel states.
+        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
+        if self.sample_goal:
+            obs_feat = self.dynamics.extract_feature(np.copy(self.obs))
+            mb_obs_feats.append(obs_feat)
+            mb_obs_feats = np.asarray(mb_obs_feats, dtype=np.float32).swapaxes(1, 0)
+            # adjust goals from the time of acting randomly
+            for env_idx in range(self.nenv):
+                if self.reached_status[env_idx]:
+                    start = reached_step[env_idx] + 1
+                    mb_goal_obs[env_idx][start:] = np.copy(self.obs[env_idx])
+                    mb_goal_infos[env_idx][start:] = mb_goal_infos[env_idx][-1]
 
         # shapes are adjusted to [nenv, nsteps, []]
         enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
@@ -152,24 +167,31 @@ class Runner(AbstractEnvRunner):
         mb_dones = np.asarray(mb_dones, dtype=np.bool).swapaxes(1, 0)
         mb_masks = mb_dones # Used for statefull models like LSTM's to mask state when done
         mb_dones = mb_dones[:, 1:] # Used for calculating returns. The dones array is now aligned with rewards
-        mb_goal_obs = np.asarray(mb_goal_obs, dtype=np.float32).swapaxes(1, 0)
-        mb_obs_feats = np.asarray(mb_obs_feats, dtype=np.float32).swapaxes(1, 0)
-        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
 
-        # adjust goals from the time of acting randomly
-        for env_idx in range(self.nenv):
-            if self.reached_status[env_idx]:
-                start = reached_step[env_idx] + 1
-                mb_goal_obs[env_idx][start:] = np.copy(self.obs[env_idx])
+        # re-compute goal_feat and int_rews
+        if self.sample_goal:
+            mb_goal_obs_flatten = np.reshape(mb_goal_obs, (-1, ) + mb_goal_obs.shape[2:])   # flatten nenv and nstep
+            mb_goal_feats = self.dynamics.extract_feature(mb_goal_obs_flatten)
+            mb_obs_feats_flatten = np.reshape(mb_obs_feats, (-1, ) + mb_obs_feats.shape[2:])  # flatten nenv and nstep
+            mb_int_rewards = self.reward_fn(mb_obs_feats_flatten, mb_goal_feats)
+            mb_int_rewards = mb_int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
 
-        mb_goal_obs_flatten = np.reshape(mb_goal_obs, (-1, ) + mb_goal_obs.shape[2:])   # flatten nenv and nstep
-        mb_goal_feats = self.dynamics.extract_feature(mb_goal_obs_flatten)
-        mb_obs_feats_flatten = np.reshape(mb_obs_feats, (-1, ) + mb_obs_feats.shape[2:])  # flatten nenv and nstep
-        mb_int_rewards = self.reward_fn(mb_obs_feats_flatten, mb_goal_feats)
-        mb_int_rewards = mb_int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
-
-        return enc_obs, mb_obs, mb_actions, mb_ext_rewards, mb_mus, mb_dones, mb_masks,\
-               mb_goal_obs, mb_goal_feats, mb_int_rewards, mb_goal_infos, reached_infos
+        results = dict(
+            enc_obs=enc_obs,
+            obs=mb_obs,
+            actions=mb_actions,
+            ext_rewards=mb_ext_rewards,
+            mus=mb_mus,
+            dones=mb_dones,
+            masks=mb_masks,
+            goal_obs=mb_goal_obs,
+            goal_infos=mb_goal_infos,
+            episode_infos=episode_infos,
+        )
+        if self.sample_goal:
+            results["goal_feats"] = mb_goal_feats
+            results["int_rewards"] = mb_int_rewards
+        return results
 
     def check_goal_reached(self, obs_feat, desired_goal):
         assert obs_feat.shape == desired_goal.shape
@@ -214,30 +236,22 @@ class Runner(AbstractEnvRunner):
 
     def evaluate(self, nb_eval):
         assert self.dynamics.dummy
-        assert self.nenv == 1
         self.goal_feat, goal_obs, goal_info = self.dynamics.get_goal(nb_goal=self.nenv)  # (nenv, goal_dim)
         eval_info = {"l": 0, "r": 0}
         for i in range(nb_eval):
             while True:
-                obs_ = np.tile(np.copy(self.obs), [self.model.nenv, ] + [1]*len(self.obs.shape[1:]))
-                if self.states:
-                    states_ = np.tile(np.copy(self.states), [self.model.nenv, ] + [1]*len(self.states.shape[1:]))
-                else:
-                    states_ = None
-                dones_ = np.tile(np.copy(self.dones), [self.model.nenv] + [1]*len(np.array(self.dones).shape[1:]))
-                actions, mus, states = self.model.step(obs_, S=states_, M=dones_, goals=self.goal_feat)
+                actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
                 obs, rewards, dones, infos = self.env.step(actions[0])
-                done = dones[0]
-                info = infos[0]
-                if info.get("episode"):
-                    assert done
-                    eval_info["l"] += info.get("episode")["l"]
-                    eval_info["r"] += info.get("episode")["r"]
-                    break
+                for env_idx in range(self.nenv):
+                    info = infos[env_idx]
+                    if info.get("episode"):
+                        assert dones[env_idx]
+                        eval_info["l"] += info.get("episode")["l"]
+                        eval_info["r"] += info.get("episode")["r"]
+                        break
                 self.states = states
                 self.dones = dones
                 self.obs = obs
         eval_info["l"] /= nb_eval
         eval_info["r"] /= nb_eval
-        self.results_writer.write_row(eval_info)
         return eval_info

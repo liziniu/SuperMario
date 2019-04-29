@@ -66,7 +66,7 @@ def get_env_type(env_id, env_type=None):
     return env_type, env_id
 
 
-def build_env(env_id, num_env, alg, reward_scale=1.0, env_type=None, gamestate=None, seed=None):
+def build_env(env_id, num_env, alg, reward_scale=1.0, env_type=None, gamestate=None, seed=None, monitor_first_name=None):
     ncpu = multiprocessing.cpu_count()
     if sys.platform == 'darwin': ncpu //= 2
     nenv = num_env or ncpu
@@ -92,34 +92,35 @@ def build_env(env_id, num_env, alg, reward_scale=1.0, env_type=None, gamestate=N
 
         flatten_dict_observations = alg not in {'her'}
         env = make_vec_env(env_id, env_type, num_env or 1, seed, reward_scale=reward_scale,
-                           flatten_dict_observations=flatten_dict_observations)
+                           flatten_dict_observations=flatten_dict_observations, monitor_first_name=monitor_first_name)
 
         if env_type == 'mujoco':
             env = VecNormalize(env)
 
     return env
 
-
 def make_vec_env(env_id, env_type, num_env, seed,
                  wrapper_kwargs=None,
                  start_index=0,
                  reward_scale=1.0,
                  flatten_dict_observations=True,
-                 gamestate=None):
+                 gamestate=None,
+                 monitor_first_name=None):
     """
     Create a wrapped, monitored SubprocVecEnv for Atari and MuJoCo.
     """
     wrapper_kwargs = wrapper_kwargs or {}
     mpi_rank = MPI.COMM_WORLD.Get_rank() if MPI else 0
     seed = seed + 10000 * mpi_rank if seed is not None else None
+    first_name = mpi_rank if monitor_first_name is None else monitor_first_name
     logger_dir = logger.get_dir()
 
     def make_thunk(rank):
         return lambda: make_env(
             env_id=env_id,
             env_type=env_type,
-            mpi_rank=mpi_rank,
-            subrank=rank,
+            first_name=first_name,
+            second_name=rank,
             seed=seed,
             reward_scale=reward_scale,
             gamestate=gamestate,
@@ -152,7 +153,7 @@ def make_atari(env_id, max_episode_steps=None):
     return env
 
 
-def make_env(env_id, env_type, mpi_rank=0, subrank=0, seed=None, reward_scale=1.0, gamestate=None, flatten_dict_observations=True, wrapper_kwargs=None, logger_dir=None):
+def make_env(env_id, env_type, first_name=0, second_name=0, seed=None, reward_scale=1.0, gamestate=None, flatten_dict_observations=True, wrapper_kwargs=None, logger_dir=None):
     wrapper_kwargs = wrapper_kwargs or {}
     if env_type == 'atari':
         env = make_atari(env_id)
@@ -169,7 +170,7 @@ def make_env(env_id, env_type, mpi_rank=0, subrank=0, seed=None, reward_scale=1.
 
     env.seed(seed + subrank if seed is not None else None)
     env = Monitor(env,
-                  logger_dir and os.path.join(logger_dir, str(mpi_rank) + '.' + str(subrank)),
+                  logger_dir and os.path.join(logger_dir, str(first_name) + '.' + str(second_name)),
                   allow_early_resets=True)
 
     if env_type == 'atari':
