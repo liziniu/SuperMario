@@ -45,18 +45,13 @@ class Runner(AbstractEnvRunner):
         self.episode = np.ones(self.nenv)
         self.episode_step = np.zeros(self.nenv)
         self.episode_reached_step = np.zeros(self.nenv)
+        self.goal_abs_dist = np.zeros(self.nenv)
 
         self.name = self.model.scope
 
     def run(self):
         if self.goal_feat is None:
             self.goal_feat, self.goal_obs, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
-            if self.sample_goal:
-                for env_idx in range(self.nenv):
-                    goal_info = self.goal_info[env_idx]
-                    if goal_info:
-                        logger.info("{}_env_{}|pos:{}|size:{}".format(
-                            self.name, env_idx, goal_info, self.dynamics.queue.qsize()))
         # enc_obs = np.split(self.obs, self.nstack, axis=3)  # so now list of obs steps
         enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
         mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
@@ -90,6 +85,12 @@ class Runner(AbstractEnvRunner):
                         if self.reached_status[env_idx]:
                             reached_step[env_idx] = step
                             self.episode_reached_step[env_idx] = np.copy(self.episode_step[env_idx])
+                            self.goal_abs_dist[env_idx] = abs(self.goal_info[env_idx]["x_pos"]-infos[env_idx]["x_pos"]) + \
+                                abs(self.goal_info[env_idx]["y_pos"]-infos[env_idx]["y_pos"])
+                            achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                            logger.info("{}_env_{}|goal_pos:{}|achieved_pos:{}|size:{}".format(
+                                self.name, env_idx, self.goal_info[env_idx], achieved_pos,
+                                self.dynamics.queue.qsize()))
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
@@ -122,10 +123,13 @@ class Runner(AbstractEnvRunner):
                         if self.reached_status[env_idx]:
                             reached = 1.0
                             time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]
+                            abs_dist = self.goal_abs_dist[env_idx]
                         else:
                             reached = 0.0
                             time_ratio = 1.0
-                        episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio)
+                            abs_dist = abs(infos[env_idx]["x_pos"]-self.goal_info[env_idx]["x_pos"]) + \
+                                       abs(infos[env_idx]["y_pos"]-self.goal_info[env_idx]["y_pos"])
+                        episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio, abs_dist=abs_dist)
                         episode_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
                                                                    y_pos=self.goal_info[env_idx]["y_pos"])
                         # re-plan goal
@@ -133,9 +137,6 @@ class Runner(AbstractEnvRunner):
                         self.goal_feat[env_idx] = goal_feat[0]
                         self.goal_obs[env_idx] = goal_obs[0]
                         self.goal_info[env_idx] = goal_info[0]
-                        if self.goal_info[env_idx]:
-                            logger.info("{}_env:{}|current goal pos:{}|goal queue size:{}".format(
-                                self.name, env_idx, self.goal_info[env_idx], self.dynamics.queue.qsize()))
                         self.episode[env_idx] += 1
                         self.episode_step[env_idx] = 0
                         self.episode_reached_step[env_idx] = 0
@@ -200,7 +201,7 @@ class Runner(AbstractEnvRunner):
             return False
         else:
             eps = 1e-6
-            tol = 0.05
+            tol = 0.03
             status = (np.square(obs_feat - desired_goal).sum() / (np.square(desired_goal).sum() + eps)) < tol
             return status
 

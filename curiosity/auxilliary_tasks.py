@@ -49,7 +49,7 @@ class InverseDynamics(FeatureExtractor):
         x = fc(x, "pred_act_fc", nh=hidsize)
         x = activ(x)
         idfpd = self.pdtype.pdfromflat(x)     # this will incur a fc to match dim
-        return idfpd.neglogp(self.ac)
+        return tf.reduce_mean(idfpd.neglogp(self.ac))
 
 
 class RandomNetworkDistillation(FeatureExtractor):

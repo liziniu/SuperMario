@@ -30,7 +30,7 @@ class Acer:
         keys = []
         keys += ["expl_return", "expl_length", "expl_x_pos", "expl_y_pos"]
         keys += ["eval_return", "eval_length", ]
-        keys += ["reached_cnt", "reached_time", ]
+        keys += ["reached_cnt", "reached_time", "goal_abs_dist"]
         self.episode_stats = EpisodeStats(maxlen=40, keys=keys)
 
     def call(self, on_policy, model_name, cnt=None):
@@ -124,6 +124,7 @@ class Acer:
             if reached_info:
                 self.episode_stats.feed(reached_info["reached"], "reached_cnt")
                 self.episode_stats.feed(reached_info["time_ratio"], "reached_time")
+                self.episode_stats.feed(reached_info["abs_dist"], "goal_abs_dist")
             goal_info = info.get("goal_info")
             if goal_info:
                 self.episode_stats.feed(goal_info["x_pos"], "expl_x_pos")
@@ -144,6 +145,7 @@ class Acer:
         logger.record_tabular("eval_return", self.episode_stats.get_mean("eval_return"))
         logger.record_tabular("goal_pos_x", self.episode_stats.get_mean("expl_x_pos"))
         logger.record_tabular("goal_pos_y", self.episode_stats.get_mean("expl_y_pos"))
+        logger.record_tabular("goal_abs_dist", self.episode_stats.get_mean("goal_abs_dist"))
         logger.record_tabular("reached_ratio", self.episode_stats.get_sum("reached_cnt") / self.episode_stats.maxlen)
         logger.record_tabular("reached_time", self.episode_stats.get_mean("reached_time"))
         for name, val in zip(names_ops, values_ops):
@@ -305,7 +307,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     runner_expl = Runner(env=env, model=model_exploration, nsteps=nsteps, save_path=save_path, store_data=store_data,
                          reward_fn=reward_fn, sample_goal=True if not dynamics.dummy else False)
-    runner_eval = Runner(env=env, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data,
+    runner_eval = Runner(env=env_eval, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data,
                          reward_fn=reward_fn, sample_goal=False)
 
     if replay_ratio > 0:
