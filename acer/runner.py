@@ -81,7 +81,8 @@ class Runner(AbstractEnvRunner):
                 # check reached based on obs_feat and goal_feat
                 for env_idx in range(self.nenv):
                     if not self.reached_status[env_idx]:
-                        self.reached_status[env_idx] = self.check_goal_reached(obs_feat[env_idx], self.goal_feat[env_idx])
+                        # self.reached_status[env_idx] = self.check_goal_reached(obs_feat[env_idx], self.goal_feat[env_idx])
+                        self.reached_status[env_idx] = self.check_goal_reached_v2(infos[env_idx], self.goal_info[env_idx])
                         if self.reached_status[env_idx]:
                             reached_step[env_idx] = step
                             self.episode_reached_step[env_idx] = np.copy(self.episode_step[env_idx])
@@ -127,8 +128,8 @@ class Runner(AbstractEnvRunner):
                         else:
                             reached = 0.0
                             time_ratio = 1.0
-                            abs_dist = abs(infos[env_idx]["x_pos"]-self.goal_info[env_idx]["x_pos"]) + \
-                                       abs(infos[env_idx]["y_pos"]-self.goal_info[env_idx]["y_pos"])
+                            abs_dist = abs(float(infos[env_idx]["x_pos"])-float(self.goal_info[env_idx]["x_pos"])) + \
+                                       abs(float(infos[env_idx]["y_pos"])-float(self.goal_info[env_idx]["y_pos"]))
                         episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio, abs_dist=abs_dist)
                         episode_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
                                                                    y_pos=self.goal_info[env_idx]["y_pos"])
@@ -204,6 +205,18 @@ class Runner(AbstractEnvRunner):
             tol = 0.03
             status = (np.square(obs_feat - desired_goal).sum() / (np.square(desired_goal).sum() + eps)) < tol
             return status
+
+    @staticmethod
+    def check_goal_reached_v2(obs_info, goal_info):
+        eps = 16
+        obs_x, obs_y = float(obs_info["x_pos"]), float(obs_info["y_pos"])
+        goal_x, goal_y = float(goal_info["x_pos"]), float(goal_info["y_pos"])
+        dist = abs(obs_x - goal_x) + abs(obs_y - goal_y)
+        if dist < eps:
+            status = True
+        else:
+            status = False
+        return status
 
     def simple_random_action(self):
         return self.env.action_space.sample()

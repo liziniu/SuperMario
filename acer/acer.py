@@ -157,7 +157,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, save_path=None, store_data=False, dynamics=None, env_eval=None,
-          eval_interval=1000, **network_kwargs):
+          eval_interval=100, use_eval_model_collect=True, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -329,7 +329,6 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     if buffer_expl is not None:
         acer.initialize()
 
-    use_eval_model_collect = True
     if use_eval_model_collect:
         replay_start = replay_start * env.num_envs / (env.num_envs + env_eval.num_envs)
     onpolicy_cnt = 0
@@ -337,11 +336,12 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         # logger.info("-------------------expl running-------------------")
         acer.call(on_policy=True, model_name="expl", cnt=onpolicy_cnt)
         acer.steps += nbatch_expl
+        onpolicy_cnt += 1
         if use_eval_model_collect:
             # logger.info("-------------------eval running-------------------")
             acer.call(on_policy=True, model_name="eval", cnt=onpolicy_cnt)
             acer.steps += nbatch_eval
-        onpolicy_cnt += 1
+            onpolicy_cnt += 1
         if replay_ratio > 0:
             n = np.random.poisson(replay_ratio)
             for _ in range(n):
