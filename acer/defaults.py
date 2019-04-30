@@ -3,5 +3,5 @@ def atari():
         lrschedule='constant',
         queue_size=1000,
         feat_dim=512,
-        replay_start=5000,
+        replay_start=200,
     )

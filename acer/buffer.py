@@ -4,13 +4,16 @@ from queue import PriorityQueue
 
 class Buffer(object):
     # gets obs, actions, rewards, mu's, (states, masks), dones
-    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, with_goal, nsteps, size=50000):
+    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, with_goal, nsteps, dist_type, size=50000):
         self.nenv = env.num_envs
         self.nsteps = nsteps
         assert callable(sample_goal_fn)
         assert callable(reward_fn)
         self.sample_goal_fn = sample_goal_fn
         self.dynamics = dynamics
+        
+        assert dist_type in ["l1", "l2"]
+        self.dist_type = dist_type
         self.reward_fn = reward_fn
         if with_goal:
             assert hasattr(self.dynamics, "extract_feature")
@@ -34,6 +37,9 @@ class Buffer(object):
         self.masks = None
         if self.with_goal:
             self.goal_obs = None
+            if self.dist_type == "l1":
+                self.obs_infos = None
+                self.goal_infos = None
         # Size indexes
         self.next_idx = 0
         self.num_in_buffer = 0
@@ -55,7 +61,7 @@ class Buffer(object):
         return _stack_obs(enc_obs, dones,
                           nsteps=self.nsteps)
 
-    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs=None):
+    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs=None, goal_infos=None, obs_infos=None,):
         # enc_obs [nenv, (nsteps + nstack), nh, nw, nc]
         # actions, rewards, dones [nenv, nsteps]
         # mus [nenv, nsteps, nact]
@@ -70,6 +76,10 @@ class Buffer(object):
             if self.with_goal:
                 assert goal_obs is not None
                 self.goal_obs = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
+                if self.dist_type == "l1":
+                    assert goal_infos is not None and obs_infos is not None
+                    self.goal_infos = np.empty([self.size] + list(goal_infos.shape), dtype=object)
+                    self.obs_infos = np.empty([self.size] + list(obs_infos.shape), dtype=object)
 
         self.enc_obs[self.next_idx] = enc_obs
         self.actions[self.next_idx] = actions
@@ -79,7 +89,9 @@ class Buffer(object):
         self.masks[self.next_idx] = masks
         if self.with_goal:
             self.goal_obs[self.next_idx] = goal_obs
-
+            if self.dist_type == "l1":
+                self.goal_infos[self.next_idx] = goal_infos
+                self.obs_infos[self.next_idx] = obs_infos
         self.next_idx = (self.next_idx + 1) % self.size
         self.num_in_buffer = min(self.size, self.num_in_buffer + 1)
 
@@ -115,15 +127,29 @@ class Buffer(object):
         results = dict(obs=obs, actions=actions, ext_rewards=ext_rewards, mus=mus, dones=dones, masks=masks)
         if self.with_goal:
             goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
-            goal_obs = self.sample_goal_fn(goal_obs)
+            if self.dist_type == "l2":
+                goal_obs, _ = self.sample_goal_fn(goal_obs)
+            else:
+                goal_infos = take(self.goal_infos)
+                obs_infos = take(self.obs_infos)
 
+                goal_obs, her_idx = self.sample_goal_fn(goal_obs)
+
+                goal_infos_append = np.concatenate([goal_infos, goal_infos[:, -1][:, None]], axis=-1)
+                obs_infos_append = np.concatenate([obs_infos, obs_infos[:, -1][:, None]], axis=-1)
+                goal_infos = np.copy(goal_infos_append)
+                obs_infos = np.copy(obs_infos_append)
+                goal_infos[her_idx] = goal_infos_append[her_idx]
+                obs_infos[her_idx] = obs_infos_append[her_idx]
             goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
             goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
-            obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
-            obs_feat = self.dynamics.extract_feature(obs_flatten)
-            int_rewards = self.reward_fn(obs_feat, goal_feats)
-            int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
-
+            if self.dist_type == "l2":
+                obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
+                obs_feat = self.dynamics.extract_feature(obs_flatten)
+                int_rewards = self.reward_fn(obs_feat, goal_feats)
+                int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
+            else:
+                int_rewards = self.reward_fn(obs_infos, goal_infos)[:, :-1]
             results["goal_feats"] = goal_feats
             results["int_rewards"] = int_rewards
         return results

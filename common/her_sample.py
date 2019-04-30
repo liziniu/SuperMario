@@ -33,15 +33,23 @@ def make_sample_her_transitions(replay_strategy, replay_k):
 
         future_obs = np.copy(transitions)
         future_obs[her_indexes] = transitions[future_indexes]
-        return future_obs
+        return future_obs, future_indexes
 
     return _sample_her_transitions
 
 
 if __name__ == "__main__":
     # Test her sample
-    nenv, nsteps, nh, nw, nc = 2, 5, 84, 84, 4
-    sample_policy = make_sample_her_transitions("future", 4)
-    goal_obs = np.random.randn(nenv, nsteps, nh, nw, nc)
-    goal_obs = sample_policy(goal_obs)
+    import matplotlib.pyplot as plt
+    np.random.seed(1)
+    nenv, nsteps, ndim = 1, 10, 1
+    sample_fn = make_sample_her_transitions("future", 4)
+    goal_obs = np.random.randint(0, 100, [nenv, nsteps, 1], dtype=int)
+    plt.figure()
     print(goal_obs)
+    plt.plot(goal_obs.flatten(), label="origin")
+    goal_obs = sample_fn(goal_obs)
+    print(goal_obs)
+    plt.plot(goal_obs.flatten(), label="her")
+    plt.legend()
+    plt.show()
