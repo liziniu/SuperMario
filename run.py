@@ -191,6 +191,7 @@ def main(args):
         logger.configure(format_strs=[])
         rank = MPI.COMM_WORLD.Get_rank()
 
+    logger.info("cmd args:{}".format(args.__dict__))
     model, env = train(args, extra_args)
 
     if args.save_path is not None and rank == 0:

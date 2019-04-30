@@ -86,8 +86,8 @@ class Runner(AbstractEnvRunner):
                         if self.reached_status[env_idx]:
                             reached_step[env_idx] = step
                             self.episode_reached_step[env_idx] = np.copy(self.episode_step[env_idx])
-                            self.goal_abs_dist[env_idx] = abs(self.goal_info[env_idx]["x_pos"]-infos[env_idx]["x_pos"]) + \
-                                abs(self.goal_info[env_idx]["y_pos"]-infos[env_idx]["y_pos"])
+                            self.goal_abs_dist[env_idx] = abs(float(self.goal_info[env_idx]["x_pos"])-float(infos[env_idx]["x_pos"])) + \
+                                abs(float(self.goal_info[env_idx]["y_pos"])-float(infos[env_idx]["y_pos"]))
                             achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                             logger.info("{}_env_{}|goal_pos:{}|achieved_pos:{}|size:{}".format(
                                 self.name, env_idx, self.goal_info[env_idx], achieved_pos,
@@ -208,7 +208,7 @@ class Runner(AbstractEnvRunner):
 
     @staticmethod
     def check_goal_reached_v2(obs_info, goal_info):
-        eps = 16
+        eps = 20
         obs_x, obs_y = float(obs_info["x_pos"]), float(obs_info["y_pos"])
         goal_x, goal_y = float(goal_info["x_pos"]), float(goal_info["y_pos"])
         dist = abs(obs_x - goal_x) + abs(obs_y - goal_y)
@@ -253,19 +253,22 @@ class Runner(AbstractEnvRunner):
         self.goal_feat, goal_obs, goal_info = self.dynamics.get_goal(nb_goal=self.nenv)  # (nenv, goal_dim)
         eval_info = {"l": 0, "r": 0}
         for i in range(nb_eval):
+            terminal = False
             while True:
                 actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_feat)
-                obs, rewards, dones, infos = self.env.step(actions[0])
-                for env_idx in range(self.nenv):
-                    info = infos[env_idx]
-                    if info.get("episode"):
-                        assert dones[env_idx]
-                        eval_info["l"] += info.get("episode")["l"]
-                        eval_info["r"] += info.get("episode")["r"]
-                        break
+                obs, rewards, dones, infos = self.env.step(actions)
+                info = infos[0]
+                if info.get("episode"):
+                    assert dones[0]
+                    eval_info["l"] += info.get("episode")["l"]
+                    eval_info["r"] += info.get("episode")["r"]
+                    terminal = True
+                if terminal:
+                    break
                 self.states = states
                 self.dones = dones
                 self.obs = obs
+        self.obs = self.env.reset()
         eval_info["l"] /= nb_eval
         eval_info["r"] /= nb_eval
         return eval_info

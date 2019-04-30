@@ -132,7 +132,7 @@ class Dynamics:
                 self.queue.put(data)
             else:
                 if baseline is None:
-                    baseline = np.median([item[0] for item in self.queue.queue])
+                    baseline = 0.8 * np.min([item[0] for item in self.queue.queue])
                 if priority[i] < baseline:
                     data = (priority[i], time.time(), obs[i], goal_infos[i])
                     if self.queue.full():
