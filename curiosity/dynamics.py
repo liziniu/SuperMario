@@ -128,26 +128,49 @@ class Dynamics:
         baseline = None
         for i in range(len(obs)):
             if self.queue.qsize() < self.nenv * 5:
-                data = (priority[i], time.time(), obs[i], goal_infos[i])
+                data = (priority[i], time.time(), obs[i], actions[i], next_obs[i], goal_infos[i])
                 self.queue.put(data)
             else:
                 if baseline is None:
-                    baseline = 0.8 * np.min([item[0] for item in self.queue.queue])
+                    baseline = 0.85 * np.min([item[0] for item in self.queue.queue])
                 if priority[i] < baseline:
-                    data = (priority[i], time.time(), obs[i], goal_infos[i])
+                    data = (priority[i], time.time(), obs[i], actions[i], next_obs[i], goal_infos[i])
                     if self.queue.full():
                         maxvalue_idx = np.argmax([item[0] for item in self.queue.queue])
                         self.queue.queue.pop(maxvalue_idx)
                     self.queue.put(data)
 
-    def get_goal(self, nb_goal):
+    def get_goal(self, nb_goal, replace=True):
         assert self.queue.qsize() >= nb_goal
-        goal_feat, goal_obs, goal_info = [], [], []
+        goal_feat, goal_obs, goal_act, goal_next_obs, goal_info = [], [], [], [], []
         for i in range(nb_goal):
             data = self.queue.get()
-            goal_obs.append(data[-2])
-            goal_info.append(data[-1])
+            goal_obs.append(data[2])
+            goal_act.append(data[3])
+            goal_next_obs.append(data[4])
+            goal_info.append(data[5])
         goal_obs = np.asarray(goal_obs)
+        if replace:
+            goal_act = np.asarray(goal_act)
+            goal_next_obs = np.asarray(goal_next_obs)
+            novelty = self.sess.run(self.novelty, feed_dict={self.obs: goal_obs, self.ac: goal_act,
+                                                             self.next_obs: goal_next_obs})
+            self.novelty_rms.update(novelty)
+            priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
+            baseline = None
+            for i in range(len(priority)):
+                if self.queue.qsize() < self.nenv * 5:
+                    data = (priority[i], time.time(), goal_obs[i], goal_act[i], goal_next_obs[i], goal_info[i])
+                    self.queue.put(data)
+                else:
+                    if baseline is None:
+                        baseline = 0.85 * np.min([item[0] for item in self.queue.queue])
+                    if priority[i] < baseline:
+                        data = (priority[i], time.time(), goal_obs[i], goal_act[i], goal_next_obs[i], goal_info[i])
+                        if self.queue.full():
+                            maxvalue_idx = np.argmax([item[0] for item in self.queue.queue])
+                            self.queue.queue.pop(maxvalue_idx)
+                        self.queue.put(data)
         assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goal_obs.shape)
         goal_feat = self.sess.run(self.feat, feed_dict={self.obs: goal_obs})
         return goal_feat, goal_obs, goal_info
