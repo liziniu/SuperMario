@@ -148,9 +148,8 @@ class Runner(AbstractEnvRunner):
         mb_goal_obs.append(np.copy(self.goal_obs))  # make dimension is true. we use this to retrace q value.
         mb_goal_obs = np.asarray(mb_goal_obs, dtype=np.float32).swapaxes(1, 0)
 
-        # evaluation model can also generate useful novel states.
-        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
         if self.sample_goal:
+            mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
             obs_feat = self.dynamics.extract_feature(np.copy(self.obs))
             mb_obs_feats.append(obs_feat)
             mb_obs_feats = np.asarray(mb_obs_feats, dtype=np.float32).swapaxes(1, 0)
