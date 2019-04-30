@@ -1,4 +1,5 @@
 import numpy as np
+from copy import deepcopy
 
 
 def make_sample_her_transitions(replay_strategy, replay_k):
@@ -31,7 +32,8 @@ def make_sample_her_transitions(replay_strategy, replay_k):
         future_indexes = np.minimum(np.maximum(1, offset_indexes.astype(int)) + her_indexes[1], T-1)
         future_indexes = [her_indexes[0], future_indexes]
 
-        future_obs = np.copy(transitions)
+        future_indexes = tuple(future_indexes)
+        future_obs = deepcopy(transitions)
         future_obs[her_indexes] = transitions[future_indexes]
         return future_obs, future_indexes
 

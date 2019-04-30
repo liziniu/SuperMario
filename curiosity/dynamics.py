@@ -28,11 +28,10 @@ class DummyDynamics:
         pass
 
     def get_goal(self, nb_goal):
-        # goal_feat, goal_obs, goal_info
-        goal_feat = np.empty([nb_goal, ] + self.feat_shape)
-        goal_obs = np.empty([nb_goal, ] + self.feat_shape)
-        goal_info = {}
-        return goal_feat, goal_obs, goal_info
+        # goal_obs, goal_info
+        goal_obs = np.empty([nb_goal, ] + [84, 84, 4])
+        goal_info = np.array([{} for _ in range(nb_goal)], dtype=object)
+        return goal_obs, goal_info
 
 
 class Dynamics:
@@ -111,8 +110,9 @@ class Dynamics:
         return tf.reduce_mean(tf.square(x - self.out_feat), axis=-1)
 
     def extract_feature(self, obs):
-        assert list(obs.shape)[1:] == self.auxiliary_task.obs.get_shape().as_list()[1:], "obs's shape:{} is wrong".format(obs.shape)
-        return self.sess.run(self.feat, feed_dict={self.auxiliary_task.obs: obs})
+        raise NotImplementedError("You should not call this function!")
+        # assert list(obs.shape)[1:] == self.auxiliary_task.obs.get_shape().as_list()[1:], "obs's shape:{} is wrong".format(obs.shape)
+        # return self.sess.run(self.feat, feed_dict={self.auxiliary_task.obs: obs})
 
     def put_goal(self, obs, actions, next_obs, goal_infos):
         assert list(obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "obs shape:{}.please flatten obs".format(obs.shape)
@@ -125,20 +125,8 @@ class Dynamics:
         novelty = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
         self.novelty_rms.update(novelty)
         priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
-        baseline = None
-        for i in range(len(obs)):
-            if self.queue.qsize() < self.nenv * 5:
-                data = (priority[i], time.time(), obs[i], actions[i], next_obs[i], goal_infos[i])
-                self.queue.put(data)
-            else:
-                if baseline is None:
-                    baseline = 0.85 * np.min([item[0] for item in self.queue.queue])
-                if priority[i] < baseline:
-                    data = (priority[i], time.time(), obs[i], actions[i], next_obs[i], goal_infos[i])
-                    if self.queue.full():
-                        maxvalue_idx = np.argmax([item[0] for item in self.queue.queue])
-                        self.queue.queue.pop(maxvalue_idx)
-                    self.queue.put(data)
+        stats = self._add_goal(obs, actions, next_obs, goal_infos, priority)
+        return stats
 
     def get_goal(self, nb_goal, replace=True):
         assert self.queue.qsize() >= nb_goal
@@ -157,23 +145,30 @@ class Dynamics:
                                                              self.next_obs: goal_next_obs})
             self.novelty_rms.update(novelty)
             priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
-            baseline = None
-            for i in range(len(priority)):
-                if self.queue.qsize() < self.nenv * 5:
-                    data = (priority[i], time.time(), goal_obs[i], goal_act[i], goal_next_obs[i], goal_info[i])
-                    self.queue.put(data)
-                else:
-                    if baseline is None:
-                        baseline = 0.85 * np.min([item[0] for item in self.queue.queue])
-                    if priority[i] < baseline:
-                        data = (priority[i], time.time(), goal_obs[i], goal_act[i], goal_next_obs[i], goal_info[i])
-                        if self.queue.full():
-                            maxvalue_idx = np.argmax([item[0] for item in self.queue.queue])
-                            self.queue.queue.pop(maxvalue_idx)
-                        self.queue.put(data)
+            self._add_goal(goal_obs, goal_act, goal_next_obs, goal_info, priority)
         assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goal_obs.shape)
-        goal_feat = self.sess.run(self.feat, feed_dict={self.obs: goal_obs})
-        return goal_feat, goal_obs, goal_info
+        # goal_feat = self.sess.run(self.feat, feed_dict={self.obs: goal_obs})
+        return goal_obs, goal_info
+
+    def _add_goal(self, obs, actions, next_obs, infos, priority):
+        baseline = None
+        stats = dict()
+        for i in range(len(priority)):
+            if self.queue.qsize() < self.nenv * 5:
+                data = (priority[i], time.time(), obs[i], actions[i], next_obs[i], infos[i])
+                self.queue.put(data)
+            else:
+                if baseline is None:
+                    queue_p = [-item[0] for item in self.queue.queue]
+                    stats["queue_max"], stats["queue_std"] = np.max(queue_p), np.std(queue_p)
+                    baseline = -0.85 * stats["queue_max"]
+                if priority[i] < baseline:
+                    data = (priority[i], time.time(), obs[i], actions[i], next_obs[i], infos[i])
+                    if self.queue.full():
+                        maxvalue_idx = np.argmax([item[0] for item in self.queue.queue])
+                        self.queue.queue.pop(maxvalue_idx)
+                    self.queue.put(data)
+        return stats
 
 if __name__ == "__main__":
     # from common.env_util import make_atari

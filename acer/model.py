@@ -60,7 +60,6 @@ class Model(object):
         eps = 1e-6
 
         self.dynamics = dynamics
-        goal_feat_shape = self.dynamics.feat_shape
 
         self.scope = scope
         with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
@@ -74,18 +73,18 @@ class Model(object):
             if self.dynamics.dummy:
                 step_goal_placeholder = None
             else:
-                step_goal_placeholder = tf.placeholder(tf.float32, (nenvs,) + goal_feat_shape, "step_goal")
+                step_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_goal")
 
             train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),)+ob_space.shape, "train_ob")
             if self.dynamics.dummy:
                 train_goal_placeholder = None
             else:
-                train_goal_placeholder = tf.placeholder(tf.float32, (nenvs*(nsteps+1),)+goal_feat_shape, "train_goal")
+                train_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),)+ob_space.shape, "train_goal")
 
             self.step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder,
-                                     goal_placeholder=step_goal_placeholder, sess=self.sess)
+                                     goal_placeholder=step_goal_placeholder, sess=self.sess, concat_on_latent=False)
             self.train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                      goal_placeholder=train_goal_placeholder, sess=self.sess)
+                                      goal_placeholder=train_goal_placeholder, sess=self.sess, concat_on_latent=False)
 
         variables = find_trainable_variables
         params = variables(scope)
@@ -237,13 +236,13 @@ class Model(object):
         self.initial_state = self.step_model.initial_state
         tf.global_variables_initializer().run(session=self.sess)
     
-    def train_policy(self, obs, actions, rewards, dones, mus, states, masks, steps, goal_feats):
+    def train_policy(self, obs, actions, rewards, dones, mus, states, masks, steps, goal_obs):
         cur_lr = self.lr.value_steps(steps)
         td_map = {self.train_model.X: obs, self.polyak_model.X: obs, self.A: actions, self.R: rewards, self.D: dones,
                   self.MU: mus, self.LR: cur_lr}
         if not self.dynamics.dummy:
             assert hasattr(self.train_model, "goals")
-            td_map[self.train_model.goals] = goal_feats
+            td_map[self.train_model.goals] = goal_obs
         if states is not None:
             td_map[self.train_model.S] = states
             td_map[self.train_model.M] = masks

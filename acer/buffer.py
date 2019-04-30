@@ -4,7 +4,7 @@ from queue import PriorityQueue
 
 class Buffer(object):
     # gets obs, actions, rewards, mu's, (states, masks), dones
-    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, with_goal, nsteps, dist_type, size=50000):
+    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, dist_type, size=50000):
         self.nenv = env.num_envs
         self.nsteps = nsteps
         assert callable(sample_goal_fn)
@@ -15,8 +15,6 @@ class Buffer(object):
         assert dist_type in ["l1", "l2"]
         self.dist_type = dist_type
         self.reward_fn = reward_fn
-        if with_goal:
-            assert hasattr(self.dynamics, "extract_feature")
         # self.nh, self.nw, self.nc = env.observation_space.shape
         self.obs_shape = env.observation_space.shape
         self.obs_dtype = env.observation_space.dtype
@@ -27,7 +25,6 @@ class Buffer(object):
         self.nbatch = self.nenv * self.nsteps
         self.size = size // (self.nsteps)  # Each loc contains nenv * nsteps frames, thus total buffer is nenv * size frames
 
-        self.with_goal = with_goal
         # Memory
         self.enc_obs = None
         self.actions = None
@@ -35,11 +32,9 @@ class Buffer(object):
         self.mus = None
         self.dones = None
         self.masks = None
-        if self.with_goal:
-            self.goal_obs = None
-            if self.dist_type == "l1":
-                self.obs_infos = None
-                self.goal_infos = None
+        self.goal_obs = None
+        self.obs_infos = None
+        self.goal_infos = None
         # Size indexes
         self.next_idx = 0
         self.num_in_buffer = 0
@@ -61,7 +56,7 @@ class Buffer(object):
         return _stack_obs(enc_obs, dones,
                           nsteps=self.nsteps)
 
-    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs=None, goal_infos=None, obs_infos=None,):
+    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goal_obs, goal_infos, obs_infos):
         # enc_obs [nenv, (nsteps + nstack), nh, nw, nc]
         # actions, rewards, dones [nenv, nsteps]
         # mus [nenv, nsteps, nact]
@@ -73,13 +68,9 @@ class Buffer(object):
             self.mus = np.empty([self.size] + list(mus.shape), dtype=np.float32)
             self.dones = np.empty([self.size] + list(dones.shape), dtype=np.bool)
             self.masks = np.empty([self.size] + list(masks.shape), dtype=np.bool)
-            if self.with_goal:
-                assert goal_obs is not None
-                self.goal_obs = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
-                if self.dist_type == "l1":
-                    assert goal_infos is not None and obs_infos is not None
-                    self.goal_infos = np.empty([self.size] + list(goal_infos.shape), dtype=object)
-                    self.obs_infos = np.empty([self.size] + list(obs_infos.shape), dtype=object)
+            self.goal_obs = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
+            self.goal_infos = np.empty([self.size] + list(goal_infos.shape), dtype=object)
+            self.obs_infos = np.empty([self.size] + list(obs_infos.shape), dtype=object)
 
         self.enc_obs[self.next_idx] = enc_obs
         self.actions[self.next_idx] = actions
@@ -87,11 +78,9 @@ class Buffer(object):
         self.mus[self.next_idx] = mus
         self.dones[self.next_idx] = dones
         self.masks[self.next_idx] = masks
-        if self.with_goal:
-            self.goal_obs[self.next_idx] = goal_obs
-            if self.dist_type == "l1":
-                self.goal_infos[self.next_idx] = goal_infos
-                self.obs_infos[self.next_idx] = obs_infos
+        self.goal_obs[self.next_idx] = goal_obs
+        self.goal_infos[self.next_idx] = goal_infos
+        self.obs_infos[self.next_idx] = obs_infos
         self.next_idx = (self.next_idx + 1) % self.size
         self.num_in_buffer = min(self.size, self.num_in_buffer + 1)
 
@@ -125,38 +114,32 @@ class Buffer(object):
         masks = take(self.masks)
 
         results = dict(obs=obs, actions=actions, ext_rewards=ext_rewards, mus=mus, dones=dones, masks=masks)
-        if self.with_goal:
-            goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
-            if self.dist_type == "l2":
-                goal_obs, _ = self.sample_goal_fn(goal_obs)
-            else:
-                goal_infos = take(self.goal_infos)
-                obs_infos = take(self.obs_infos)
+        goal_obs = take(self.goal_obs)      # (nenv, nstep, nh, nw, nc)
+        if self.dist_type == "l2":
+            raise NotImplementedError
+            # goal_obs, _ = self.sample_goal_fn(goal_obs)
+        else:
+            goal_infos = take(self.goal_infos)
+            obs_infos = take(self.obs_infos)
 
-                goal_obs, her_idx = self.sample_goal_fn(goal_obs)
+            goal_obs, her_idx = self.sample_goal_fn(goal_obs)
 
-                goal_infos_append = np.concatenate([goal_infos, goal_infos[:, -1][:, None]], axis=-1)
-                obs_infos_append = np.concatenate([obs_infos, obs_infos[:, -1][:, None]], axis=-1)
-                goal_infos = np.copy(goal_infos_append)
-                obs_infos = np.copy(obs_infos_append)
-                goal_infos[her_idx] = goal_infos_append[her_idx]
-                obs_infos[her_idx] = obs_infos_append[her_idx]
-            goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
-            goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
-            if self.dist_type == "l2":
-                obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
-                obs_feat = self.dynamics.extract_feature(obs_flatten)
-                int_rewards = self.reward_fn(obs_feat, goal_feats)
-                int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
-            else:
-                int_rewards = self.reward_fn(obs_infos, goal_infos)[:, :-1]
-            results["goal_feats"] = goal_feats
-            results["int_rewards"] = int_rewards
+            goal_infos[her_idx] = goal_infos[her_idx]
+            obs_infos[her_idx] = obs_infos[her_idx]
+        # goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
+        # goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
+        if self.dist_type == "l2":
+            raise NotImplementedError
+            # obs_flatten = np.copy(obs).reshape((-1, ) + obs.shape[2:])
+            # obs_feat = self.dynamics.extract_feature(obs_flatten)
+            # int_rewards = self.reward_fn(obs_feat, goal_feats)
+            # int_rewards = int_rewards.reshape((self.nenv, self.nsteps+1))[:, :-1]     # strip the last reward
+        else:
+            int_rewards = self.reward_fn(obs_infos, goal_infos)[:, :-1]
+        # results["goal_feats"] = goal_feats
+        results["goal_obs"] = goal_obs
+        results["int_rewards"] = int_rewards
         return results
-
-    def initialize(self, obs, actions, next_obs, info):
-        assert not self.dynamics.dummy
-        self.dynamics.put_goal(obs, actions, next_obs, info)
 
 
 def _stack_obs_ref(enc_obs, dones, nsteps):

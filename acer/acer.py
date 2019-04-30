@@ -10,17 +10,17 @@ from common.her_sample import make_sample_her_transitions
 from acer.model import Model
 from common.env_util import parser_env_id, build_env, get_env_type
 from common.util import EpisodeStats
+from copy import deepcopy
 
 
 class Acer:
-    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer_expl, buffer_eval, log_interval):
+    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval):
         self.runner_expl = runner_expl
         self.runner_eval = runner_eval
         self.model_expl = model_expl
         self.model_eval = model_eval
 
-        self.buffer_expl = buffer_expl
-        self.buffer_eval = buffer_eval
+        self.buffer = buffer
         self.log_interval = log_interval
         self.tstart = None
         self.steps = 0
@@ -31,56 +31,57 @@ class Acer:
         keys += ["eval_return", "eval_length", ]
         keys += ["goal_x_pos", "goal_y_pos", ]
         keys += ["reached_cnt", "reached_time", "goal_abs_dist"]
-        self.episode_stats = EpisodeStats(maxlen=40, keys=keys)
+        keys += ["queue_max", "queue_std"]
 
-    def call(self, on_policy, model_name, cnt=None):
+        self.logger_keys = keys.copy()
+        self.logger_keys.remove("reached_cnt")
+        self.episode_stats = EpisodeStats(maxlen=20, keys=keys)
+
+    def call(self, on_policy, model_name=None, cnt=None):
         names_ops, values_ops = [], []
         if model_name == "expl":
-            runner, buffer = self.runner_expl, self.buffer_expl
-        elif model_name == "eval":
-            runner, buffer = self.runner_eval, self.buffer_eval
+            runner = self.runner_expl
         else:
-            raise ValueError("Unknown model_name:{}".format(model_name))
+            runner = self.runner_eval
 
         if on_policy:
             # collect data
             results = runner.run()
-            buffer.put(results["enc_obs"], results["actions"], results["ext_rewards"], results["mus"], results["dones"],
-                       results["masks"], results["goal_obs"], results["goal_infos"], results["obs_infos"])
+            self.buffer.put(results["enc_obs"], results["actions"], results["ext_rewards"], results["mus"],
+                            results["dones"], results["masks"], results["goal_obs"], results["goal_infos"],
+                            results["obs_infos"])
             # training dynamics & put goals
             mb_obs, mb_actions, mb_next_obs, mb_obs_infos = self.adjust_dynamics_input_shape(results)
-            self.model_expl.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_obs_infos)
+            queue_info = self.model_expl.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_obs_infos)
+            if len(queue_info.keys()) > 0:
+                self.episode_stats.feed(queue_info["queue_max"], "queue_max")
+                self.episode_stats.feed(queue_info["queue_std"], "queue_std")
             names_ops_, values_ops_ = self.model_expl.train_dynamics(mb_obs, mb_actions, mb_next_obs, self.steps)
             names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
 
             # store useful episode information
             self.record_episode_info(results["episode_infos"], model_name)
         else:
-            results = buffer.get()
-        obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_feats = self.adjust_policy_input_shape(results, model_name)
+            results = self.buffer.get()
+        obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
 
         # Training Policy
         assert self.model_expl.scope != self.model_eval.scope
         names_ops_, values_ops_ = self.model_eval.train_policy(
-            obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_feats)
+            obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
         names_ops, values_ops = names_ops + names_ops_, values_ops+values_ops_
-        # only training exploration when use model_expl since model_eval do not generate goal_feats and int_rewards
-        if model_name == "expl":
-            assert int_rewards is not None and goal_feats is not None
-            names_ops_, values_ops_ = self.model_expl.train_policy(
-                obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_feats
-            )
-            names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
+        names_ops_, values_ops_ = self.model_expl.train_policy(
+            obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
+        names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
         self.nupdates += 1
 
         # Logging
-        if on_policy and cnt % self.log_interval == 0 and model_name == "expl":
+        if on_policy and cnt % self.log_interval == 0:
             self.log(names_ops, values_ops)
 
     def initialize(self):
-        init_steps = int(1e3)
-        obs, actions, next_obs, info = self.runner_expl.initialize(init_steps)
-        self.buffer_expl.initialize(obs, actions, next_obs, info)
+        init_steps = int(2e3)
+        self.runner_expl.initialize(init_steps)
 
     def evaluate(self, nb_eval):
         results = self.runner_eval.evaluate(nb_eval)
@@ -90,23 +91,19 @@ class Acer:
     @staticmethod
     def adjust_dynamics_input_shape(results):
         # flatten on-policy data (nenv, nstep, ...) for dynamics training and put_goal
-        mb_next_obs = np.copy(results["obs"][:, 1:])
-        mb_obs = np.copy(results["obs"][:, :-1])
+        mb_next_obs = deepcopy(results["obs"][:, 1:])
+        mb_obs = deepcopy(results["obs"][:, :-1])
         mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])
         mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
-        mb_actions = np.copy(results["actions"])
+        mb_actions = deepcopy(results["actions"])
         mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
-        mb_obs_infos = np.copy(results["obs_infos"])
+        mb_obs_infos = deepcopy(results["obs_infos"])
         mb_obs_infos = mb_obs_infos.reshape(-1)
         return mb_obs, mb_actions, mb_next_obs, mb_obs_infos
 
-    def adjust_policy_input_shape(self, results, model_name):
-        if model_name == "expl":
-            runner = self.runner_expl
-        elif model_name == "eval":
-            runner = self.runner_eval
-        else:
-            raise ValueError
+    def adjust_policy_input_shape(self, results):
+        assert self.runner_expl.nbatch == self.runner_eval.nbatch
+        runner = self.runner_expl
 
         obs = results["obs"].reshape(runner.batch_ob_shape)
         actions = results["actions"].reshape(runner.nbatch)
@@ -114,9 +111,9 @@ class Acer:
         mus = results["mus"].reshape([runner.nbatch, runner.nact])
         dones = results["dones"].reshape([runner.nbatch])
         masks = results["masks"].reshape([runner.batch_ob_shape[0]])
-        int_rewards = results["int_rewards"].reshape([runner.nbatch]) if "int_rewards" in results else None
-        goal_feats = results["goal_feats"] if "goal_feats" in results else None
-        return obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_feats
+        int_rewards = results["int_rewards"].reshape([runner.nbatch])
+        goal_obs = results["goal_obs"].reshape(runner.batch_ob_shape)
+        return obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs
     
     def record_episode_info(self, episode_infos, model_name):
         for info in episode_infos:
@@ -139,15 +136,9 @@ class Acer:
         logger.record_tabular("fps", int(self.steps / (time.time() - self.tstart)))
         logger.record_tabular("time_elapse(min)", int(time.time() - self.tstart) // 60)
         logger.record_tabular("nupdates", self.nupdates)
-        logger.record_tabular("expl_length", self.episode_stats.get_mean("expl_length"))
-        logger.record_tabular("expl_return", self.episode_stats.get_mean("expl_return"))
-        logger.record_tabular("eval_length", self.episode_stats.get_mean("eval_length"))
-        logger.record_tabular("eval_return", self.episode_stats.get_mean("eval_return"))
-        logger.record_tabular("goal_x_pos", self.episode_stats.get_mean("goal_x_pos"))
-        logger.record_tabular("goal_y_pos", self.episode_stats.get_mean("goal_y_pos"))
-        logger.record_tabular("goal_abs_dist", self.episode_stats.get_mean("goal_abs_dist"))
+        for key in self.logger_keys:
+            logger.record_tabular(key, self.episode_stats.get_mean(key))
         logger.record_tabular("reached_ratio", self.episode_stats.get_sum("reached_cnt") / self.episode_stats.maxlen)
-        logger.record_tabular("reached_time", self.episode_stats.get_mean("reached_time"))
         for name, val in zip(names_ops, values_ops):
             logger.record_tabular(name, float(val))
         logger.dump_tabular()
@@ -323,6 +314,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         else:
             reward_fn = reward_fn_v2
 
+    # we still need two runner to avoid one reset others' envs.
     runner_expl = Runner(env=env, model=model_exploration, nsteps=nsteps, save_path=save_path, store_data=store_data,
                          reward_fn=reward_fn, sample_goal=True, dist_type=dist_type)
     runner_eval = Runner(env=env_eval, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data,
@@ -330,22 +322,18 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     if replay_ratio > 0:
         sample_goal_fn = make_sample_her_transitions("future", replay_k)
-        buffer_expl = Buffer(
-            env=env, nsteps=nsteps, size=buffer_size, dynamics=dynamics, reward_fn=reward_fn,
-            sample_goal_fn=sample_goal_fn, with_goal=True, dist_type=dist_type)
-        buffer_eval = Buffer(
-            env=env_eval, nsteps=nsteps, size=buffer_size, dynamics=model_evaluation.dynamics, reward_fn=reward_fn,
-            sample_goal_fn=sample_goal_fn, with_goal=False, dist_type=dist_type)
+        assert env.num_envs == env_eval.num_envs
+        buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, dynamics=dynamics, reward_fn=reward_fn,
+                        sample_goal_fn=sample_goal_fn, dist_type=dist_type)
     else:
-        buffer_expl, buffer_eval = None, None
+        buffer = None
     nbatch_expl = nenvs*nsteps
     nbatch_eval = nenvs_eval*nsteps
-    acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer_expl, buffer_eval, log_interval)
+    acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer, log_interval)
     acer.tstart = time.time()
 
     # === init to make sure we can get goal ===
-    if buffer_expl is not None:
-        acer.initialize()
+    acer.initialize()
 
     if use_eval_model_collect:
         replay_start = replay_start * env.num_envs / (env.num_envs + env_eval.num_envs)
@@ -363,26 +351,9 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         if replay_ratio > 0:
             n = np.random.poisson(replay_ratio)
             for _ in range(n):
-                if not use_eval_model_collect:
-                    if buffer_expl.has_atleast(replay_start):
-                        # logger.info("-----------using replay buffer from expl-----------")
-                        acer.call(on_policy=False, model_name="expl")   # no simulation steps in this
-                else:
-                    if buffer_expl.has_atleast(replay_start) and buffer_eval.has_atleast(replay_start):
-                        if np.random.uniform() < 0.5:
-                            # logger.info("-----------using replay buffer from expl-----------")
-                            acer.call(on_policy=False, model_name="expl")
-                        else:
-                            # logger.info("-----------using replay buffer from eval-----------")
-                            acer.call(on_policy=False, model_name="eval")
-                    elif buffer_expl.has_atleast(replay_start) and not buffer_eval.has_atleast(replay_start):
-                        # logger.info("-----------using replay buffer from expl-----------")
-                        acer.call(on_policy=False, model_name="expl")
-                    elif not buffer_expl.has_atleast(replay_start) and buffer_eval.has_atleast(replay_start):
-                        # logger.info("-----------using replay buffer from eval-----------")
-                        acer.call(on_policy=False, model_name="eval")
-                    else:
-                        continue
+                if buffer.has_atleast(replay_start):
+                    # logger.info("-----------using replay buffer from expl-----------")
+                    acer.call(on_policy=False)
         if not use_eval_model_collect and onpolicy_cnt % eval_interval == 0:
             acer.evaluate(nb_eval=1)
     return model_evaluation

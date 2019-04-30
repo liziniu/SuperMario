@@ -129,6 +129,8 @@ class EpisodeStats:
         if key not in self.keys:
             self.keys.append(key)
             self.episode_stats[key] = deque(self.maxlen)
+        if data is None:
+            raise ValueError("key input Nonetype!")
         self.episode_stats[key].append(data)
 
     def get_mean(self, key):
