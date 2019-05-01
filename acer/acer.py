@@ -32,6 +32,7 @@ class Acer:
         keys += ["goal_x_pos", "goal_y_pos", ]
         keys += ["reached_cnt", "reached_time", "goal_abs_dist"]
         keys += ["queue_max", "queue_std"]
+        keys += ["int_rew_mean", "int_rew_std"]
 
         self.logger_keys = keys.copy()
         self.logger_keys.remove("reached_cnt")
@@ -65,6 +66,8 @@ class Acer:
             results = self.buffer.get()
         obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
 
+        self.episode_stats.feed(np.mean(int_rewards), "int_rew_mean")
+        self.episode_stats.feed(np.std(int_rewards), "int_rew_std")
         # Training Policy
         assert self.model_expl.scope != self.model_eval.scope
         names_ops_, values_ops_ = self.model_eval.train_policy(
@@ -300,12 +303,12 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             assert current_pos_infos.shape == goal_pos_infos.shape
             nenv, nsteps = current_pos_infos.shape[0], current_pos_infos.shape[1]
             mb_int_rewards = np.empty([nenv, nsteps])
-            alpha = 5e-3
+            coeff = 0.05
             for i in range(nenv):
                 for j in range(nsteps):
                     dist = abs(float(current_pos_infos[i][j]["x_pos"]) - float(goal_pos_infos[i][j]["x_pos"])) +\
                            abs(float(current_pos_infos[i][j]["y_pos"]) - float(goal_pos_infos[i][j]["y_pos"]))
-                    mb_int_rewards[i][j] = np.exp(-alpha * dist)
+                    mb_int_rewards[i][j] = np.exp(-coeff * dist)
             return mb_int_rewards
 
         assert dist_type in ["l1", "l2"]

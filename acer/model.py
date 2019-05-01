@@ -113,7 +113,7 @@ class Model(object):
 
         with tf.variable_scope(scope, custom_getter=custom_getter, reuse=True):
             self.polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                       goal_placeholder=train_goal_placeholder, sess=self.sess)
+                                       goal_placeholder=train_goal_placeholder, sess=self.sess, concat_on_latent=False)
 
         # Notation: (var) = batch variable, (var)s = seqeuence variable, (var)_i = variable index by action at step i
 
@@ -242,7 +242,9 @@ class Model(object):
                   self.MU: mus, self.LR: cur_lr}
         if not self.dynamics.dummy:
             assert hasattr(self.train_model, "goals")
+            assert hasattr(self.polyak_model, "goals")
             td_map[self.train_model.goals] = goal_obs
+            td_map[self.polyak_model.goals] = goal_obs
         if states is not None:
             td_map[self.train_model.S] = states
             td_map[self.train_model.M] = masks

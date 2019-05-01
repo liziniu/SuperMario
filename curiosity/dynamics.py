@@ -30,6 +30,7 @@ class DummyDynamics:
     def get_goal(self, nb_goal):
         # goal_obs, goal_info
         goal_obs = np.empty([nb_goal, ] + [84, 84, 4])
+        goal_obs.fill(np.nan)
         goal_info = np.array([{} for _ in range(nb_goal)], dtype=object)
         return goal_obs, goal_info
 
