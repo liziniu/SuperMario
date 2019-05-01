@@ -61,9 +61,9 @@ class Runner(AbstractEnvRunner):
         episode_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_obs)
-            actions[self.reached_status] = self.simple_random_action()
+            actions[self.reached_status] = self.simple_random_action(np.sum(self.reached_status))
             mus[self.reached_status] = self.get_mu_of_random_action()
-            
+
             mb_obs.append(deepcopy(self.obs))
             mb_actions.append(actions)
             mb_mus.append(mus)
@@ -215,8 +215,8 @@ class Runner(AbstractEnvRunner):
             status = False
         return status
 
-    def simple_random_action(self):
-        return self.env.action_space.sample()
+    def simple_random_action(self, nb_action):
+        return np.random.randint(0, self.env.action_space.n, nb_action)
 
     def get_mu_of_random_action(self):
         assert isinstance(self.env.action_space, spaces.Discrete)
