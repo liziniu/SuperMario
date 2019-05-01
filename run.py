@@ -182,6 +182,8 @@ def main(args):
     args, unknown_args = arg_parser.parse_known_args(args)
     extra_args = parse_cmdline_kwargs(unknown_args)
 
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     path = osp.join("logs", datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S-%f".format(args.env)))
     extra_args["save_path"] = path
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
