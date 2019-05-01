@@ -6,7 +6,7 @@ from baselines.common.input import observation_placeholder, encode_observation
 from baselines.common.tf_util import adjust_shape
 from baselines.common.mpi_running_mean_std import RunningMeanStd
 from baselines.common.models import get_network_builder
-
+from baselines import logger
 import gym
 
 
@@ -133,12 +133,14 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
         if goal_placeholder is not None and not concat_on_latent:
             assert encoded_x.get_shape().as_list()[:-1] == encoded_goal.get_shape().as_list()[:-1]
             encoded_x = tf.concat([encoded_x, encoded_goal], axis=-1, name="concat_obs")
+            logger.info("concat obs and goals on inputs")
 
         with tf.variable_scope('pi', reuse=tf.AUTO_REUSE):
             policy_latent = policy_network(encoded_x)
             if goal_placeholder is not None and concat_on_latent:
                 assert policy_latent.get_shape().as_list()[:-1] == policy_latent.get_shape().as_list()[:-1]
                 policy_latent = tf.concat([policy_latent, encoded_goal], axis=-1, name="concat_latent")
+                logger.info("concat obs and goals on latent")
             if isinstance(policy_latent, tuple):
                 policy_latent, recurrent_tensors = policy_latent
 

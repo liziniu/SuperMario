@@ -303,7 +303,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             eps = 1e-3
             for i in range(nenv):
                 for j in range(nsteps):
-                    dist = abs(float(current_pos_infos[i][j]["x_pos"]) - float(goal_pos_infos[i][j]["y_pos"])) +\
+                    dist = abs(float(current_pos_infos[i][j]["x_pos"]) - float(goal_pos_infos[i][j]["x_pos"])) +\
                            abs(float(current_pos_infos[i][j]["y_pos"]) - float(goal_pos_infos[i][j]["y_pos"]))
                     mb_int_rewards[i][j] = np.clip(np.exp(-dist), eps, 1)
             return mb_int_rewards
