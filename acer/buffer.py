@@ -4,7 +4,7 @@ from queue import PriorityQueue
 
 class Buffer(object):
     # gets obs, actions, rewards, mu's, (states, masks), dones
-    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, dist_type, size=50000):
+    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, dist_type, goal_shape, size=50000):
         self.nenv = env.num_envs
         self.nsteps = nsteps
         assert callable(sample_goal_fn)
@@ -19,6 +19,7 @@ class Buffer(object):
         self.obs_shape = env.observation_space.shape
         self.obs_dtype = env.observation_space.dtype
         self.ac_dtype = env.action_space.dtype
+        self.goal_shape = goal_shape
         self.nc = self.obs_shape[-1]
         self.nstack = env.nstack
         self.nc //= self.nstack
@@ -139,6 +140,7 @@ class Buffer(object):
         # results["goal_feats"] = goal_feats
         results["goal_obs"] = goal_obs
         results["int_rewards"] = int_rewards
+        results["goal_infos"] = goal_infos
         return results
 
 

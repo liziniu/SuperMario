@@ -11,7 +11,7 @@ from baselines import logger
 
 class Runner(AbstractEnvRunner):
     def __init__(self, env, model, nsteps, save_path, store_data, reward_fn, sample_goal, dist_type, alt_model=None,
-                 use_random_policy_expl=None):
+                 use_random_policy_expl=None,):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space,
                           spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
@@ -29,7 +29,9 @@ class Runner(AbstractEnvRunner):
         self.ac_shape = env.action_space.shape
         self.nstack = self.env.nstack
         self.nc = self.batch_ob_shape[-1] // self.nstack
-
+        self.goal_shape = self.model.goal_shape
+        self.goal_as_image = self.model.goal_as_image
+        
         self.save_path = save_path
         self.store_data = store_data
         self.recorder = DataRecorder(save_path)
@@ -39,7 +41,7 @@ class Runner(AbstractEnvRunner):
         self.sample_goal = sample_goal
         # self.batch_goal_feat_shape = (nenv*(nsteps+1),) + env.observation_space.shape + self.dynamics.feat_shape
         self.reached_status = np.array([False for _ in range(self.nenv)], dtype=bool)
-        self.goal_obs, self.goal_info = None, None
+        self.goals, self.goal_info = None, None
         self.reward_fn = reward_fn
         # self.results_writer = ResultsWriter(os.path.join(save_path, "evaluation.csv"))
 
@@ -58,8 +60,10 @@ class Runner(AbstractEnvRunner):
             assert alt_model is not None
 
     def run(self):
-        if self.goal_obs is None:
-            self.goal_obs, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
+        if self.goals is None:
+            self.goals, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
+            if not self.goal_as_image:
+                self.goals = self.goal_to_embedding(self.goal_info)
         # enc_obs = np.split(self.obs, self.nstack, axis=3)  # so now list of obs steps
         enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
         mb_obs = np.empty((self.nenv, self.nsteps + 1) + self.obs_shape, dtype=self.obs_dtype)
@@ -69,23 +73,23 @@ class Runner(AbstractEnvRunner):
         mb_masks = np.empty((self.nenv, self.nsteps + 1), dtype=bool)
         mb_ext_rew = np.empty((self.nenv, self.nsteps), dtype=np.float32)
         mb_obs_infos = np.empty((self.nenv, self.nsteps + 1), dtype=object)
-        mb_goal_obs = np.empty((self.nenv, self.nsteps + 1) + self.obs_shape, dtype=self.obs_dtype)
+        mb_goals = np.empty((self.nenv, self.nsteps + 1) + self.goal_shape, dtype=self.obs_dtype)
         mb_goal_infos = np.empty((self.nenv, self.nsteps + 1), dtype=object)
 
         # mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
-        # mb_obs_infos, mb_goal_obs, mb_goal_infos = [], [], []
+        # mb_obs_infos, mb_goals, mb_goal_infos = [], [], []
         reached_step, done_step = np.array([None for _ in range(self.nenv)]), np.array([None for _ in range(self.nenv)])
 
         episode_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
-            actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_obs)
+            actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
             if self.sample_goal:
                 if self.use_random_policy_expl:
                     actions[self.reached_status] = self.simple_random_action(np.sum(self.reached_status))
                     mus[self.reached_status] = self.get_mu_of_random_action()
                 else:
                     if np.sum(self.reached_status) > 0:
-                        alt_action, alt_mu, alt_states = self.alt_model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_obs)
+                        alt_action, alt_mu, alt_states = self.alt_model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
                         actions[self.reached_status] = alt_action[self.reached_status]
                         mus[self.reached_status] = alt_mu[self.reached_status]
 
@@ -102,7 +106,7 @@ class Runner(AbstractEnvRunner):
 
             mb_obs_infos[:, step] = np.asarray(
                 [{"x_pos": info["x_pos"], "y_pos": info["y_pos"], "source": self.name} for info in infos], dtype=object)
-            mb_goal_obs[:, step] = deepcopy(self.goal_obs)
+            mb_goals[:, step] = deepcopy(self.goals)
             mb_goal_infos[:, step] = deepcopy(self.goal_info)
             self.episode_step += 1
             # states information for statefull models like LSTM
@@ -132,7 +136,10 @@ class Runner(AbstractEnvRunner):
                     if self.dones[env_idx]:
                         # (- - done(t)) -> (done done, done(t))
                         start, end = 0, step + 1
-                        mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                        if self.goal_as_image:
+                            mb_goals[env_idx, start:end] = mb_obs[env_idx, step] 
+                        else:
+                            mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                         mb_goal_infos[env_idx, start:end] = infos[env_idx]
                     elif step == self.nsteps - 1:
                         if done_step[env_idx] is None:
@@ -144,7 +151,10 @@ class Runner(AbstractEnvRunner):
                         end = step + 1
                         if end == start:
                             continue
-                        mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                        if self.goal_as_image:
+                            mb_goals[env_idx, start:end] = mb_obs[env_idx, step]
+                        else:
+                            mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                         mb_goal_infos[env_idx, start:end] = infos[env_idx]
             else:
                 for env_idx in range(self.nenv):
@@ -154,7 +164,10 @@ class Runner(AbstractEnvRunner):
                             if reached_step[env_idx] is None:
                                 # reach|[- - done] -> [done, done, done]
                                 start, end = 0, step + 1
-                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                if self.goal_as_image:
+                                    mb_goals[env_idx, start:end] = mb_obs[env_idx, step]
+                                else:
+                                    mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                                 mb_goal_infos[env_idx, start:end] = infos[env_idx]
                             else:
                                 # [- - reach(done)] -> [ - - -]  if reached_step[env_idx] == step
@@ -162,7 +175,10 @@ class Runner(AbstractEnvRunner):
                                 start, end = reached_step[env_idx] + 1, step + 1
                                 if end == start:
                                     continue
-                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                if self.goal_as_image:
+                                    mb_goals[env_idx, start:end] = mb_obs[env_idx, step]
+                                else:
+                                    mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                                 mb_goal_infos[env_idx, start:end] = infos[env_idx]
                         elif not self.dones[env_idx] and self.reached_status[env_idx]:
                             # reached|[ - - -]  if reached_step[env_idx] is None:
@@ -177,7 +193,10 @@ class Runner(AbstractEnvRunner):
                             if reached_step[env_idx] is None:
                                 # reach|[- - done(t)] -> [done, done, done(t)]
                                 start, end = 0, step + 1
-                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                if self.goal_as_image:
+                                    mb_goals[env_idx, start:end] = mb_obs[env_idx, step]
+                                else:
+                                    mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                                 mb_goal_infos[env_idx, start:end] = infos[env_idx]
                             else:
                                 # [- - reach(done)(t)] -> [- - -]
@@ -185,7 +204,10 @@ class Runner(AbstractEnvRunner):
                                 start, end = reached_step[env_idx] + 1, step + 1
                                 if end == start:
                                     continue
-                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                if self.goal_as_image:
+                                    mb_goals[env_idx, start:end] = mb_obs[env_idx, step]
+                                else:
+                                    mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                                 mb_goal_infos[env_idx, start:end] = infos[env_idx]
                         elif not self.dones[env_idx] and self.reached_status[env_idx]:
                             if reached_step[env_idx] is None:
@@ -196,8 +218,10 @@ class Runner(AbstractEnvRunner):
                                 start, end = reached_step[env_idx] + 1, step + 1
                             if end == start:
                                 continue
-                            mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
-                            mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                            if self.goal_as_image:
+                                mb_goals[env_idx, start:end] = mb_obs[env_idx, step]
+                            else:
+                                mb_goals[env_idx, start:end] = self.goal_to_embedding(infos[env_idx])
                         else:
                             # [- - - done(t)]  if self.dones[env_idx] and not self.reached_status[env_idx]
                             # [- - - - (t)] if not self.dones[env_idx] and not self.reached_status[env_idx]
@@ -238,7 +262,10 @@ class Runner(AbstractEnvRunner):
                                                                    reward_to_go=self.episode_reward_to_go[env_idx])
                         # re-plan goal
                         goal_obs, goal_info = self.dynamics.get_goal(nb_goal=1)
-                        self.goal_obs[env_idx] = goal_obs[0]
+                        if self.goal_as_image:
+                            self.goals[env_idx] = goal_obs[0]
+                        else:
+                            self.goals[env_idx] = self.goal_to_embedding(goal_info[0])
                         self.goal_info[env_idx] = goal_info[0]
                         self.episode[env_idx] += 1
                         self.episode_step[env_idx] = 0
@@ -249,7 +276,7 @@ class Runner(AbstractEnvRunner):
         mb_obs[:, -1] = deepcopy(self.obs)
 
         # dummy append. Just consist with previous one.
-        mb_goal_obs[:, -1] = mb_goal_obs[:, -2]
+        mb_goals[:, -1] = mb_goals[:, -2]
         mb_goal_infos[:, -1] = mb_goal_infos[:, -2]
         mb_obs_infos[:, -1] = mb_obs_infos[:, -2]
 
@@ -270,7 +297,7 @@ class Runner(AbstractEnvRunner):
             masks=mb_masks,
             obs_infos=mb_obs_infos,  # nenv, nsteps, two purpose: 1)put into dynamics; 2) put into buffer
             episode_infos=episode_infos,
-            goal_obs=mb_goal_obs,  # nenv, nsteps+1,
+            goal_obs=mb_goals,  # nenv, nsteps+1,
             goal_infos=mb_goal_infos,
             int_rewards=mb_int_rewards
         )
@@ -306,15 +333,33 @@ class Runner(AbstractEnvRunner):
         assert isinstance(self.env.action_space, spaces.Discrete)
         return np.array([1 / self.env.action_space.n for _ in range(self.env.action_space.n)])
 
+    @staticmethod
+    def goal_to_embedding(goal_infos):
+        feat_dim = 512
+        nb_tile = feat_dim // 2
+        if isinstance(goal_infos, dict):
+            goal_embedding = np.array([goal_infos["x_pos"], goal_infos["y_pos"]], dtype=np.float32).reshape(1, 2)
+            goal_embedding = np.tile(goal_embedding, [1]*len(goal_embedding.shape[:-1])+[nb_tile])
+            return goal_embedding
+        
+        def get_pos(x):
+            return float(x["x_pos"]), float(x["y_pos"])
+        vf = np.vectorize(get_pos)
+        goal_pos = vf(goal_infos)
+        goal_x, goal_y = np.expand_dims(goal_pos[0], -1).astype(np.float32), np.expand_dims(goal_pos[1], -1).astype(np.float32)
+        goal_embedding = np.concatenate([goal_x, goal_y], axis=-1)
+        goal_embedding = np.tile(goal_embedding, [1]*len(goal_embedding.shape[:-1])+[nb_tile])
+        return goal_embedding
+
     def initialize(self, init_steps):
         mb_obs, mb_actions, mb_next_obs, mb_goal_infos = [], [], [], []
         for _ in range(init_steps):
             mb_obs.append(deepcopy(self.obs))
             actions = np.asarray([self.env.action_space.sample() for _ in range(self.nenv)])
             self.obs, rewards, dones, infos = self.env.step(actions)
-            goal_infos = [{"x_pos": info.get("x_pos", None),
-                           "y_pos": info.get("y_pos", None),
-                           "source": self.name} for info in infos]
+            goal_infos = np.array([{"x_pos": info.get("x_pos", None),
+                                    "y_pos": info.get("y_pos", None),
+                                    "source": self.name} for info in infos], dtype=object)
             mb_goal_infos.append(goal_infos)
             mb_actions.append(actions)
             mb_next_obs.append(deepcopy(self.obs))
@@ -323,7 +368,8 @@ class Runner(AbstractEnvRunner):
         mb_actions = np.asarray(mb_actions).swapaxes(1, 0)
         mb_next_obs = np.asarray(mb_next_obs).swapaxes(1, 0)
 
-        batch_size = 100
+        batch_size = init_steps // 10
+        assert batch_size > 100
         ind = np.random.randint(0, init_steps, batch_size)
         mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])[ind]
         mb_goal_infos = mb_goal_infos.reshape(-1, )[ind]
@@ -357,3 +403,28 @@ class Runner(AbstractEnvRunner):
         eval_info["l"] /= nb_eval
         eval_info["r"] /= nb_eval
         return eval_info
+
+
+if __name__ == "__main__":
+    # test vectorize f
+    infos = []
+    nenv, nstep = 1000, 2000
+    for i in range(nenv * nstep):
+        infos.append({"x_pos": np.random.randint(100), "y_pos": np.random.randint(100)})
+    infos = np.array(infos, dtype=object).reshape([nenv, nstep])
+
+    t = time.time()
+    results1 = np.empty(shape=[nenv, nstep])
+    for i in range(nenv):
+        for j in range(nstep):
+            results1[i][j] = infos[i][j]["x_pos"] - infos[i][j]["y_pos"]
+    print("time:{}".format(time.time() -t))
+
+    t = time.time()
+    def f(x):
+        return x["x_pos"] - x["y_pos"]
+
+    vf = np.vectorize(f)
+    results2 = vf(infos)
+    print("time:{}".format(time.time() - t))
+    assert np.sum(results1 - results2) < 1e-4
