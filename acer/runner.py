@@ -12,17 +12,20 @@ from baselines import logger
 class Runner(AbstractEnvRunner):
     def __init__(self, env, model, nsteps, save_path, store_data, reward_fn, sample_goal, dist_type):
         super().__init__(env=env, model=model, nsteps=nsteps)
-        assert isinstance(env.action_space, spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
+        assert isinstance(env.action_space,
+                          spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
         assert isinstance(env, VecFrameStack)
 
         self.nact = env.action_space.n
         nenv = self.nenv
         self.nbatch = nenv * nsteps
-        self.batch_ob_shape = (nenv*(nsteps+1),) + env.observation_space.shape
+        self.batch_ob_shape = (nenv * (nsteps + 1),) + env.observation_space.shape
 
         self.obs = env.reset()
         self.obs_dtype = env.observation_space.dtype
+        self.obs_shape = env.observation_space.shape
         self.ac_dtype = env.action_space.dtype
+        self.ac_shape = env.action_space.shape
         self.nstack = self.env.nstack
         self.nc = self.batch_ob_shape[-1] // self.nstack
 
@@ -54,9 +57,19 @@ class Runner(AbstractEnvRunner):
             self.goal_obs, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
         # enc_obs = np.split(self.obs, self.nstack, axis=3)  # so now list of obs steps
         enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
-        mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
-        mb_obs_infos, mb_goal_obs, mb_goal_infos = [], [], []
-        reached_step = np.zeros(self.nenv, dtype=np.int32)
+        mb_obs = np.empty((self.nenv, self.nsteps + 1) + self.obs_shape, dtype=self.obs_dtype)
+        mb_act = np.empty((self.nenv, self.nsteps) + self.ac_shape, dtype=self.ac_dtype)
+        mb_mus = np.empty((self.nenv, self.nsteps, self.nact), dtype=np.float32)
+        mb_dones = np.empty((self.nenv, self.nsteps), dtype=bool)
+        mb_masks = np.empty((self.nenv, self.nsteps + 1), dtype=bool)
+        mb_ext_rew = np.empty((self.nenv, self.nsteps), dtype=np.float32)
+        mb_obs_infos = np.empty((self.nenv, self.nsteps + 1), dtype=object)
+        mb_goal_obs = np.empty((self.nenv, self.nsteps + 1) + self.obs_shape, dtype=self.obs_dtype)
+        mb_goal_infos = np.empty((self.nenv, self.nsteps + 1), dtype=object)
+
+        # mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
+        # mb_obs_infos, mb_goal_obs, mb_goal_infos = [], [], []
+        reached_step, done_step = np.array([None for _ in range(self.nenv)]), np.array([None for _ in range(self.nenv)])
 
         episode_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
@@ -64,61 +77,108 @@ class Runner(AbstractEnvRunner):
             actions[self.reached_status] = self.simple_random_action(np.sum(self.reached_status))
             mus[self.reached_status] = self.get_mu_of_random_action()
 
-            mb_obs.append(deepcopy(self.obs))
-            mb_actions.append(actions)
-            mb_mus.append(mus)
-            mb_dones.append(self.dones)
-            
+            mb_obs[:, step] = deepcopy(self.obs)
+            mb_act[:, step] = actions
+            mb_mus[:, step, :] = mus
+            mb_masks[:, step] = deepcopy(self.dones)
+
             obs, rewards, dones, infos = self.env.step(actions)
-            # evaluation model can also generate useful novel states.
-            mb_obs_infos.append([{"x_pos": info["x_pos"], "y_pos": info["y_pos"]} for info in infos])
-            mb_goal_infos.append(self.goal_info)
-            mb_goal_obs.append(deepcopy(self.goal_obs))
+            enc_obs.append(obs[..., -self.nc:])
+            mb_dones[:, step] = dones
+            mb_ext_rew[:, step] = rewards
+
+            mb_obs_infos[:, step] = np.asarray(
+                [{"x_pos": info["x_pos"], "y_pos": info["y_pos"]} for info in infos], dtype=object)
+            mb_goal_obs[:, step] = deepcopy(self.goal_obs)
+            mb_goal_infos[:, step] = deepcopy(self.goal_info)
+            self.episode_step += 1
+            # states information for statefull models like LSTM
+            self.states = states
+            self.dones = dones
+            self.obs = obs
+
+            # check reached
             if self.sample_goal:
-                # check reached based on obs_feat and goal_feat
                 for env_idx in range(self.nenv):
                     if not self.reached_status[env_idx]:
                         if self.dist_type == "l1":
-                            self.reached_status[env_idx] = self.check_goal_reached_v2(infos[env_idx], self.goal_info[env_idx])
+                            self.reached_status[env_idx] = self.check_goal_reached_v2(
+                                infos[env_idx], self.goal_info[env_idx])
                         else:
                             raise NotImplementedError("I do not know how to compute goal_latent")
                         if self.reached_status[env_idx]:
                             reached_step[env_idx] = step
                             self.episode_reached_step[env_idx] = deepcopy(self.episode_step[env_idx])
-                            self.goal_abs_dist[env_idx] = abs(float(self.goal_info[env_idx]["x_pos"])-float(infos[env_idx]["x_pos"])) + \
-                                abs(float(self.goal_info[env_idx]["y_pos"])-float(infos[env_idx]["y_pos"]))
-                            achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                            self.goal_abs_dist[env_idx] = \
+                                abs(float(self.goal_info[env_idx]["x_pos"]) - float(
+                                    infos[env_idx]["x_pos"])) + \
+                                abs(float(self.goal_info[env_idx]["y_pos"]) - float(
+                                    infos[env_idx]["y_pos"]))
+                            achieved_pos = {"x_pos": infos[env_idx]["x_pos"],
+                                            "y_pos": infos[env_idx]["y_pos"]}
                             logger.info("{}_env_{}|goal_pos:{}|achieved_pos:{}|size:{}".format(
                                 self.name, env_idx, self.goal_info[env_idx], achieved_pos,
                                 self.dynamics.queue.qsize()))
-            # states information for statefull models like LSTM
-            self.states = states
-            self.dones = dones
-            self.obs = obs
-            mb_ext_rewards.append(rewards)
-            enc_obs.append(obs[..., -self.nc:])
 
+            # check done
+            done_step[self.dones] = step
+
+            # revise goal
+            if not self.sample_goal:
+                for env_idx in range(self.nenv):
+                    if self.dones[env_idx]:
+                        # (- - done(t)) -> (done done, done(t))
+                        start, end = 0, step + 1
+                        mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                        mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                    elif step == self.nsteps - 1:
+                        if done_step[env_idx] is None:
+                            # (- - t) -> (t, t, t)
+                            start = 0
+                        else:
+                            # (- - done - - t) -> (- - - t, t, t)
+                            start = done_step[env_idx] + 1
+                        end = self.nsteps
+                        mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                        mb_goal_infos[env_idx, start:end] = infos[env_idx]
+            else:
+                for env_idx in range(self.nenv):
+                    if step != self.nsteps - 1:
+                        # dones is instant variable but reached_status is a transitive variable
+                        if self.dones[env_idx] and self.reached_status[env_idx]:
+                            if reached_step[env_idx] is None:
+                                # reach|[- - done(t)] -> [done, done, done]
+                                start, end = 0, step + 1
+                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                            else:
+                                if reached_step[env_idx] == step:
+                                    # [- - reach(done)(t)] -> [ - - -]
+                                    pass
+                                else:
+                                    # [- - reach - - done(t)] -> [- - - done done done]
+                                    start, end = reached_step[env_idx] + 1, step + 1
+                                    mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                    mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                        elif not self.dones[env_idx] and self.reached_status[env_idx]:
+                            if reached_step[env_idx] is None:
+                                # reach | [ - - -(t)] or reach | [- - - t]
+                                pass
+                            else:
+                                # [- - r(t)] or [- - r - -(t)]
+                                pass
+                        elif self.dones[env_idx] and not self.reached_status[env_idx]:
+                            # [- - - done(t)]
+                            pass
+                        else:
+                            # [- - - - -(t)]
+                            pass
+            # summary
             for env_idx in range(self.nenv):
-                # store data for visualize
                 info = infos[env_idx]
-                if self.store_data:
-                    data = dict(
-                        x_pos=info.get("x_pos", None),
-                        y_pos=info.get("y_pos", None),
-                        episode=self.episode[env_idx],
-                        timestep=self.episode_step[env_idx],
-                        reward=rewards[env_idx],
-                        env_id=env_idx,
-                        act=actions[env_idx]
-                    )
-                    self.recorder.store(data)
-                self.episode_step[env_idx] += 1
-                # summary
                 if self.dones[env_idx]:
                     if info.get("episode"):
                         episode_infos[env_idx]["episode"] = info.get("episode")
-                    if self.store_data:
-                        self.recorder.dump()
                     if self.sample_goal:
                         if self.reached_status[env_idx]:
                             reached = 1.0
@@ -128,14 +188,14 @@ class Runner(AbstractEnvRunner):
                             time_ratio = 1.0
                         abs_dist = deepcopy(self.goal_abs_dist[env_idx])
                         if abs_dist is None:
-                            abs_dist = abs(float(infos[env_idx]["x_pos"])-float(self.goal_info[env_idx]["x_pos"])) + \
-                                       abs(float(infos[env_idx]["y_pos"])-float(self.goal_info[env_idx]["y_pos"]))
-                        episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio, abs_dist=abs_dist)
+                            abs_dist = abs(float(infos[env_idx]["x_pos"]) - float(self.goal_info[env_idx]["x_pos"])) + \
+                                       abs(float(infos[env_idx]["y_pos"]) - float(self.goal_info[env_idx]["y_pos"]))
+                        episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio,
+                                                                      abs_dist=abs_dist)
                         episode_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
                                                                    y_pos=self.goal_info[env_idx]["y_pos"])
                         # re-plan goal
                         goal_obs, goal_info = self.dynamics.get_goal(nb_goal=1)
-                        # self.goal_feat[env_idx] = goal_feat[0]
                         self.goal_obs[env_idx] = goal_obs[0]
                         self.goal_info[env_idx] = goal_info[0]
                         self.episode[env_idx] += 1
@@ -143,50 +203,32 @@ class Runner(AbstractEnvRunner):
                         self.episode_reached_step[env_idx] = 0
                         self.reached_status[env_idx] = False
                         self.goal_abs_dist[env_idx] = None
-        mb_obs.append(deepcopy(self.obs))
-        mb_dones.append(self.dones)
-        mb_goal_obs.append(deepcopy(self.goal_obs))  # make dimension is true. we use this to retrace q value.
-        mb_goal_infos.append(deepcopy(self.goal_info))  # we assume the difference by this info can be ignored
-        mb_obs_infos.append(mb_obs_infos[-1])   # we assume the difference by this info can be ignored
 
-        mb_goal_obs = np.asarray(mb_goal_obs, dtype=np.float32).swapaxes(1, 0)
-        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
-        mb_obs_infos = np.asarray(mb_obs_infos, dtype=object).swapaxes(1, 0)
-        for env_idx in range(self.nenv):
-            if self.sample_goal:
-                if self.reached_status[env_idx]:
-                    start = reached_step[env_idx] + 1   # adjust states that we have reached.
-                else:
-                    start = len(mb_goal_obs)
-            else:
-                start = 0
-            mb_goal_obs[env_idx][start:] = deepcopy(self.obs[env_idx])
-            mb_goal_infos[env_idx][start:] = mb_obs_infos[env_idx][-1]
+        mb_obs[:, -1] = deepcopy(self.obs)
+
+        # dummy append. Just consist with previous one.
+        mb_goal_obs[:, -1] = mb_goal_obs[:, -2]
+        mb_goal_infos[:, -1] = mb_goal_infos[:, -2]
+        mb_obs_infos[:, -1] = mb_obs_infos[:, -2]
+
         if self.dist_type == "l2":
             raise NotImplementedError
         else:
             mb_int_rewards = self.reward_fn(mb_obs_infos, mb_goal_infos)[:, :-1]
         # shapes are adjusted to [nenv, nsteps, []]
         enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
-        mb_obs = np.asarray(mb_obs, dtype=self.obs_dtype).swapaxes(1, 0)
-        mb_actions = np.asarray(mb_actions, dtype=self.ac_dtype).swapaxes(1, 0)
-        mb_ext_rewards = np.asarray(mb_ext_rewards, dtype=np.float32).swapaxes(1, 0)
-        mb_mus = np.asarray(mb_mus, dtype=np.float32).swapaxes(1, 0)
-        mb_dones = np.asarray(mb_dones, dtype=np.bool).swapaxes(1, 0)
-        mb_masks = mb_dones  # Used for statefull models like LSTM's to mask state when done
-        mb_dones = mb_dones[:, 1:]  # Used for calculating returns. The dones array is now aligned with rewards
 
         results = dict(
             enc_obs=enc_obs,
             obs=mb_obs,
-            actions=mb_actions,
-            ext_rewards=mb_ext_rewards,
+            actions=mb_act,
+            ext_rewards=mb_ext_rew,
             mus=mb_mus,
             dones=mb_dones,
             masks=mb_masks,
-            obs_infos=mb_obs_infos,     # nenv, nsteps, two purpose: 1)put into dynamics; 2) put into buffer
+            obs_infos=mb_obs_infos,  # nenv, nsteps, two purpose: 1)put into dynamics; 2) put into buffer
             episode_infos=episode_infos,
-            goal_obs=mb_goal_obs,       # nenv, nsteps+1,
+            goal_obs=mb_goal_obs,  # nenv, nsteps+1,
             goal_infos=mb_goal_infos,
             int_rewards=mb_int_rewards
         )
@@ -220,7 +262,7 @@ class Runner(AbstractEnvRunner):
 
     def get_mu_of_random_action(self):
         assert isinstance(self.env.action_space, spaces.Discrete)
-        return 1/self.env.action_space.n
+        return np.array([1 / self.env.action_space.n for _ in range(self.env.action_space.n)])
 
     def initialize(self, init_steps):
         mb_obs, mb_actions, mb_next_obs, mb_goal_infos = [], [], [], []
@@ -233,15 +275,15 @@ class Runner(AbstractEnvRunner):
             mb_goal_infos.append(goal_infos)
             mb_actions.append(actions)
             mb_next_obs.append(deepcopy(self.obs))
-        mb_obs = np.asarray(mb_obs).swapaxes(1, 0)      # (nenv, nstep, obs_shape)
-        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)    # (nenv, nstep, dict)
+        mb_obs = np.asarray(mb_obs).swapaxes(1, 0)  # (nenv, nstep, obs_shape)
+        mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)  # (nenv, nstep, dict)
         mb_actions = np.asarray(mb_actions).swapaxes(1, 0)
         mb_next_obs = np.asarray(mb_next_obs).swapaxes(1, 0)
 
-        mb_obs = mb_obs.reshape((-1, ) + mb_obs.shape[2:])
+        mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])
         mb_goal_infos = mb_goal_infos.reshape(-1, )
-        mb_actions = mb_actions.reshape((-1, ) + mb_actions.shape[2:])
-        mb_next_obs = mb_next_obs.reshape((-1, ) + mb_next_obs.shape[2:])
+        mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
+        mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
 
         self.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_goal_infos)
         self.obs = self.env.reset()
