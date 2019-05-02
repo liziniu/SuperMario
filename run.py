@@ -12,7 +12,7 @@ from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
 from curiosity.dynamics import DummyDynamics, Dynamics
-from common.cmd_util import common_arg_parser, parse_unknown_args
+from common.cmd_util import common_arg_parser, parse_unknown_args, parse_acer_mode
 from common.env_util import build_env
 
 try:
@@ -78,22 +78,31 @@ def train(args, extra_args):
 
     print('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
 
-    if args.aux_task is None:
-        dynamics = DummyDynamics()
-        alg_kwargs.pop("queue_size")
-        alg_kwargs.pop("feat_dim")
-    else:
-        sess = get_session()
-        queue_size = alg_kwargs.pop("queue_size")
-        feat_dim = alg_kwargs.pop("feat_dim")
-        dynamics = Dynamics(sess, env, args.aux_task, queue_size, feat_dim)
+    if args.alg == "acer":
+        if args.aux_task is None:
+            dynamics = DummyDynamics()
+            alg_kwargs.pop("queue_size")
+            alg_kwargs.pop("feat_dim")
+        else:
+            sess = get_session()
+            queue_size = alg_kwargs.pop("queue_size")
+            feat_dim = alg_kwargs.pop("feat_dim")
+            dynamics = Dynamics(sess, env, args.aux_task, queue_size, feat_dim)
+
+        use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list = parse_acer_mode(args.mode)
+
+        alg_kwargs["use_expl_collect"] = use_expl_collect
+        alg_kwargs["use_eval_collect"] = use_eval_collect
+        alg_kwargs["use_random_policy_expl"] = use_random_policy_expl
+        alg_kwargs["dyna_source_list"] = dyna_source_list
+        alg_kwargs["dynamics"] = dynamics
+        alg_kwargs["store_data"] = args.store_data
+        alg_kwargs["save_path"] = extra_args["save_path"]
+
     model = learn(
         env=env,
         seed=seed,
         total_timesteps=total_timesteps,
-        save_path=extra_args["save_path"],
-        store_data=args.store_data,
-        dynamics=dynamics,
         env_eval=env_eval,
         **alg_kwargs
     )

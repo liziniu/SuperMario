@@ -45,6 +45,7 @@ def common_arg_parser():
     parser.add_argument('--store_data', default=False, action='store_true')
     parser.add_argument('--aux_task', help='auxiliary task type(for acer/curiosity)', type=str, choices=["RF", "RND", "IDF"])
     parser.add_argument('--gpu', type=str, default="12,13,2")
+    parser.add_argument('--mode', type=int, default=1, choices=[1, 2, 3, 4])
     return parser
 
 
@@ -79,3 +80,35 @@ def parse_unknown_args(args):
             preceded_by_key = False
 
     return retval
+
+
+def parse_acer_mode(mode):
+    if mode == 1:
+        # only evaluation policy
+        use_expl_collect = False
+        use_eval_collect = True
+        use_random_policy_expl = None
+        dyna_source_list = ["eval"]
+    elif mode == 2:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = False
+        dyna_source_list = ["eval"]
+    elif mode == 3:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = True
+        dyna_source_list = ["eval"]
+    elif mode == 4:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = True
+        dyna_source_list = ["eval", "expl"]
+    elif mode == 5:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = False
+        dyna_source_list = ["eval", "expl"]
+    else:
+        raise ValueError("mode:{} wrong!".format(mode))
+    return use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list

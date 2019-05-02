@@ -10,7 +10,8 @@ from baselines import logger
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, env, model, nsteps, save_path, store_data, reward_fn, sample_goal, dist_type):
+    def __init__(self, env, model, nsteps, save_path, store_data, reward_fn, sample_goal, dist_type, alt_model=None,
+                 use_random_policy_expl=None):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space,
                           spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
@@ -51,6 +52,10 @@ class Runner(AbstractEnvRunner):
 
         assert dist_type in ["l1", "l2"]
         self.dist_type = dist_type
+        self.alt_model = alt_model
+        self.use_random_policy_expl = use_random_policy_expl
+        if self.use_random_policy_expl:
+            assert alt_model is not None
 
     def run(self):
         if self.goal_obs is None:
@@ -74,8 +79,15 @@ class Runner(AbstractEnvRunner):
         episode_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_obs)
-            actions[self.reached_status] = self.simple_random_action(np.sum(self.reached_status))
-            mus[self.reached_status] = self.get_mu_of_random_action()
+            if self.sample_goal:
+                if self.use_random_policy_expl:
+                    actions[self.reached_status] = self.simple_random_action(np.sum(self.reached_status))
+                    mus[self.reached_status] = self.get_mu_of_random_action()
+                else:
+                    if np.sum(self.reached_status) > 0:
+                        alt_action, alt_mu, alt_states = self.alt_model.step(self.obs, S=self.states, M=self.dones, goals=self.goal_obs)
+                        actions[self.reached_status] = alt_action[self.reached_status]
+                        mus[self.reached_status] = alt_mu[self.reached_status]
 
             mb_obs[:, step] = deepcopy(self.obs)
             mb_act[:, step] = actions
@@ -196,7 +208,11 @@ class Runner(AbstractEnvRunner):
                 if self.dones[env_idx]:
                     if info.get("episode"):
                         episode_infos[env_idx]["episode"] = info.get("episode")
-                    if self.sample_goal:
+                    if not self.sample_goal:
+                        episode_infos[env_idx]["reached_info"] = dict(source=self.name,
+                                                                      x_pos=infos[env_idx]["x_pos"],
+                                                                      y_pos=infos[env_idx]["y_pos"])
+                    else:
                         if self.reached_status[env_idx]:
                             reached = 1.0
                             time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]

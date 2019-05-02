@@ -11,10 +11,11 @@ from acer.model import Model
 from common.env_util import parser_env_id, build_env, get_env_type
 from common.util import EpisodeStats
 from copy import deepcopy
+import sys
 
 
 class Acer:
-    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval):
+    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval, dyna_source_list):
         self.runner_expl = runner_expl
         self.runner_eval = runner_eval
         self.model_expl = model_expl
@@ -25,12 +26,13 @@ class Acer:
         self.tstart = None
         self.steps = 0
         self.nupdates = 0
+        self.dyna_source_list = dyna_source_list
 
         keys = []
-        keys += ["return_expl", "return_eval", ]
-        keys += ["length_expl", "length_eval", ]
-        keys += ["goal_x_expl", "goal_y_expl", "goal_x_eval", "goal_y_eval", "rtg"]
-        keys += ["reached_cnt", "reached_time", "goal_abs_dist", "final_x_expl", "final_y_expl", "final_x_eval", "final_y_eval"]
+        keys += ["expl_return", "eval_return", "expl_length", "eval_length"]
+        keys += ["expl_goal_x", "expl_goal_y", "eval_goal_x", "eval_goal_y", "reward_to_go", "goal_x,", "goal_y"]
+        keys += ["reached_cnt", "reached_time", "goal_dist", "expl_final_x", "expl_final_y",
+                 "eval_final_x", "eval_final_y"]
         keys += ["queue_max", "queue_std"]
         keys += ["int_rew_mean", "int_rew_std"]
 
@@ -53,12 +55,13 @@ class Acer:
                             results["obs_infos"])
             # training dynamics & put goals
             mb_obs, mb_actions, mb_next_obs, mb_obs_infos = self.adjust_dynamics_input_shape(results)
-            queue_info = self.model_expl.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_obs_infos)
-            if len(queue_info.keys()) > 0:
-                self.episode_stats.feed(queue_info["queue_max"], "queue_max")
-                self.episode_stats.feed(queue_info["queue_std"], "queue_std")
-            names_ops_, values_ops_ = self.model_expl.train_dynamics(mb_obs, mb_actions, mb_next_obs, self.steps)
-            names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
+            if model_name in self.dyna_source_list:
+                queue_info = self.model_expl.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_obs_infos)
+                if len(queue_info.keys()) > 0:
+                    self.episode_stats.feed(queue_info["queue_max"], "queue_max")
+                    self.episode_stats.feed(queue_info["queue_std"], "queue_std")
+                names_ops_, values_ops_ = self.model_expl.train_dynamics(mb_obs, mb_actions, mb_next_obs, self.steps)
+                names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
 
             # store useful episode information
             self.record_episode_info(results["episode_infos"], model_name)
@@ -79,11 +82,11 @@ class Acer:
         self.nupdates += 1
 
         # Logging
-        if on_policy and cnt % self.log_interval == 0:
+        if on_policy and cnt % self.log_interval == 0 and model_name in self.dyna_source_list:
             self.log(names_ops, values_ops)
 
     def initialize(self):
-        init_steps = int(2e3)
+        init_steps = int(3e3)
         self.runner_expl.initialize(init_steps)
 
     def evaluate(self, nb_eval):
@@ -123,21 +126,27 @@ class Acer:
             reached_info = info.get("reached_info")
             if reached_info:
                 source = reached_info.get("source", "")
-                self.episode_stats.feed(reached_info["reached"], "reached_cnt")
-                self.episode_stats.feed(reached_info["time_ratio"], "reached_time")
-                self.episode_stats.feed(reached_info["abs_dist"], "goal_abs_dist")
-                self.episode_stats.feed(reached_info["x_pos"], "final_x_" + source)
-                self.episode_stats.feed(reached_info["y_pos"], "final_y_" + source)
+                source = source + "_" if source != "" else ""
+                if "expl" in source:
+                    self.episode_stats.feed(reached_info["reached"],  "reached_cnt")
+                    self.episode_stats.feed(reached_info["time_ratio"], "reached_time")
+                    self.episode_stats.feed(reached_info["abs_dist"], "goal_dist")
+                self.episode_stats.feed(reached_info["x_pos"], source + "final_x")
+                self.episode_stats.feed(reached_info["y_pos"], source + "final_y")
             goal_info = info.get("goal_info")
             if goal_info:
                 source = goal_info.get("source", "")
-                self.episode_stats.feed(goal_info["x_pos"], "goal_x_" + source)
-                self.episode_stats.feed(goal_info["y_pos"], "goal_y_" + source)
-                self.episode_stats.feed(goal_info["reward_to_go"], "rtg")
+                source = source + "_" if source != "" else ""
+                self.episode_stats.feed(goal_info["x_pos"], source + "goal_x")
+                self.episode_stats.feed(goal_info["y_pos"], source + "goal_y")
+                self.episode_stats.feed(goal_info["x_pos"], "goal_x")
+                self.episode_stats.feed(goal_info["y_pos"], "goal_y")
+                if "expl" in source:
+                    self.episode_stats.feed(goal_info["reward_to_go"], "reward_to_go")
             return_info = info.get("episode")
             if return_info:
-                self.episode_stats.feed(return_info["l"], "length_{}".format(model_name))
-                self.episode_stats.feed(return_info["r"], "return_{}".format(model_name))
+                self.episode_stats.feed(return_info["l"], "{}_length".format(model_name))
+                self.episode_stats.feed(return_info["r"], "{}_return".format(model_name))
 
     def log(self, names_ops, values_ops):
         logger.record_tabular("total_timesteps", self.steps)
@@ -156,7 +165,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, save_path=None, store_data=False, dynamics=None, env_eval=None,
-          eval_interval=300, use_eval_model_collect=True, dist_type="l1", **network_kwargs):
+          eval_interval=300, use_eval_collect=True, use_expl_collect=True, dyna_source_list=["acer_eval", "acer_expl"],
+          dist_type="l1", use_random_policy_expl=True, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -221,6 +231,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                                     For instance, 'mlp' network architecture has arguments num_hidden and num_layers.
 
     '''
+    if sys.platform == "darwin":
+        log_interval = 20
 
     logger.info("Running Acer with following kwargs")
     logger.info(locals())
@@ -304,16 +316,21 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             return np.exp(-np.sum(np.square(current_state-desired_goal), -1) /
                           (eps+np.sum(np.square(desired_goal), -1)))
 
-        def reward_fn_v2(current_pos_infos, goal_pos_infos):
+        def reward_fn_v2(current_pos_infos, goal_pos_infos, sparse=True):
             assert current_pos_infos.shape == goal_pos_infos.shape
             nenv, nsteps = current_pos_infos.shape[0], current_pos_infos.shape[1]
             mb_int_rewards = np.empty([nenv, nsteps])
-            coeff = 0.05
+            coeff = 0.03
+            threshold = 20
             for i in range(nenv):
                 for j in range(nsteps):
                     dist = abs(float(current_pos_infos[i][j]["x_pos"]) - float(goal_pos_infos[i][j]["x_pos"])) +\
                            abs(float(current_pos_infos[i][j]["y_pos"]) - float(goal_pos_infos[i][j]["y_pos"]))
-                    mb_int_rewards[i][j] = np.exp(-coeff * dist)
+                    if sparse:
+                        rew = float(dist < threshold)
+                    else:
+                        rew = np.exp(-coeff * dist)
+                    mb_int_rewards[i][j] = rew
             return mb_int_rewards
 
         assert dist_type in ["l1", "l2"]
@@ -324,7 +341,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     # we still need two runner to avoid one reset others' envs.
     runner_expl = Runner(env=env, model=model_exploration, nsteps=nsteps, save_path=save_path, store_data=store_data,
-                         reward_fn=reward_fn, sample_goal=True, dist_type=dist_type)
+                         reward_fn=reward_fn, sample_goal=True, dist_type=dist_type, alt_model=model_evaluation,
+                         use_random_policy_expl=use_random_policy_expl)
     runner_eval = Runner(env=env_eval, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data,
                          reward_fn=reward_fn, sample_goal=False, dist_type=dist_type)
 
@@ -337,24 +355,26 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         buffer = None
     nbatch_expl = nenvs*nsteps
     nbatch_eval = nenvs_eval*nsteps
-    acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer, log_interval)
+
+    acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer, log_interval, dyna_source_list)
     acer.tstart = time.time()
 
     # === init to make sure we can get goal ===
     acer.initialize()
 
-    if use_eval_model_collect:
-        replay_start = replay_start * env.num_envs / (env.num_envs + env_eval.num_envs)
+    replay_start = replay_start * env.num_envs / (env.num_envs + env_eval.num_envs)
     onpolicy_cnt = 0
+
     while acer.steps < total_timesteps:
         # logger.info("-------------------expl running-------------------")
-        acer.call(on_policy=True, model_name="expl", cnt=onpolicy_cnt)
-        acer.steps += nbatch_expl
-        onpolicy_cnt += 1
-        if use_eval_model_collect:
+        if use_eval_collect:
             # logger.info("-------------------eval running-------------------")
             acer.call(on_policy=True, model_name="eval", cnt=onpolicy_cnt)
             acer.steps += nbatch_eval
+            onpolicy_cnt += 1
+        if use_expl_collect:
+            acer.call(on_policy=True, model_name="expl", cnt=onpolicy_cnt)
+            acer.steps += nbatch_expl
             onpolicy_cnt += 1
         if replay_ratio > 0:
             n = np.random.poisson(replay_ratio)
@@ -362,6 +382,6 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                 if buffer.has_atleast(replay_start):
                     # logger.info("-----------using replay buffer from expl-----------")
                     acer.call(on_policy=False)
-        if not use_eval_model_collect and onpolicy_cnt % eval_interval == 0:
+        if not use_eval_collect and onpolicy_cnt % eval_interval == 0:
             acer.evaluate(nb_eval=1)
     return model_evaluation
