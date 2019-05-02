@@ -6,4 +6,5 @@ python run.py \
     --reward_scale 0.0667 \
     --alg acer \
     --num_timesteps 1e6 \
-    --aux_task RF
+    --aux_task RF \
+    --gpu 12,13,2

@@ -45,9 +45,9 @@ class Runner(AbstractEnvRunner):
         self.episode = np.ones(self.nenv)
         self.episode_step = np.zeros(self.nenv)
         self.episode_reached_step = np.zeros(self.nenv)
-        self.goal_abs_dist = np.array([None for _ in range(self.nenv)])
+        self.episode_reward_to_go = np.zeros(self.nenv)
 
-        self.name = self.model.scope
+        self.name = self.model.scope.split("acer_")[1]
 
         assert dist_type in ["l1", "l2"]
         self.dist_type = dist_type
@@ -86,9 +86,10 @@ class Runner(AbstractEnvRunner):
             enc_obs.append(obs[..., -self.nc:])
             mb_dones[:, step] = dones
             mb_ext_rew[:, step] = rewards
+            self.episode_reward_to_go[self.reached_status] += rewards[self.reached_status]
 
             mb_obs_infos[:, step] = np.asarray(
-                [{"x_pos": info["x_pos"], "y_pos": info["y_pos"]} for info in infos], dtype=object)
+                [{"x_pos": info["x_pos"], "y_pos": info["y_pos"], "source": self.name} for info in infos], dtype=object)
             mb_goal_obs[:, step] = deepcopy(self.goal_obs)
             mb_goal_infos[:, step] = deepcopy(self.goal_info)
             self.episode_step += 1
@@ -102,23 +103,13 @@ class Runner(AbstractEnvRunner):
                 for env_idx in range(self.nenv):
                     if not self.reached_status[env_idx]:
                         if self.dist_type == "l1":
-                            self.reached_status[env_idx] = self.check_goal_reached_v2(
-                                infos[env_idx], self.goal_info[env_idx])
+                            self.reached_status[env_idx] = self.check_goal_reached_v2(infos[env_idx],
+                                                                                      self.goal_info[env_idx])
                         else:
                             raise NotImplementedError("I do not know how to compute goal_latent")
                         if self.reached_status[env_idx]:
                             reached_step[env_idx] = step
                             self.episode_reached_step[env_idx] = deepcopy(self.episode_step[env_idx])
-                            self.goal_abs_dist[env_idx] = \
-                                abs(float(self.goal_info[env_idx]["x_pos"]) - float(
-                                    infos[env_idx]["x_pos"])) + \
-                                abs(float(self.goal_info[env_idx]["y_pos"]) - float(
-                                    infos[env_idx]["y_pos"]))
-                            achieved_pos = {"x_pos": infos[env_idx]["x_pos"],
-                                            "y_pos": infos[env_idx]["y_pos"]}
-                            logger.info("{}_env_{}|goal_pos:{}|achieved_pos:{}|size:{}".format(
-                                self.name, env_idx, self.goal_info[env_idx], achieved_pos,
-                                self.dynamics.queue.qsize()))
 
             # check done
             done_step[self.dones] = step
@@ -138,7 +129,9 @@ class Runner(AbstractEnvRunner):
                         else:
                             # (- - done - - t) -> (- - - t, t, t)
                             start = done_step[env_idx] + 1
-                        end = self.nsteps
+                        end = step + 1
+                        if end == start:
+                            continue
                         mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
                         mb_goal_infos[env_idx, start:end] = infos[env_idx]
             else:
@@ -147,31 +140,55 @@ class Runner(AbstractEnvRunner):
                         # dones is instant variable but reached_status is a transitive variable
                         if self.dones[env_idx] and self.reached_status[env_idx]:
                             if reached_step[env_idx] is None:
-                                # reach|[- - done(t)] -> [done, done, done]
+                                # reach|[- - done] -> [done, done, done]
                                 start, end = 0, step + 1
                                 mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
                                 mb_goal_infos[env_idx, start:end] = infos[env_idx]
                             else:
-                                if reached_step[env_idx] == step:
-                                    # [- - reach(done)(t)] -> [ - - -]
-                                    pass
-                                else:
-                                    # [- - reach - - done(t)] -> [- - - done done done]
-                                    start, end = reached_step[env_idx] + 1, step + 1
-                                    mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
-                                    mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                                # [- - reach(done)] -> [ - - -]  if reached_step[env_idx] == step
+                                # [- - reach - - done] -> [- - - done done done]
+                                start, end = reached_step[env_idx] + 1, step + 1
+                                if end == start:
+                                    continue
+                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                mb_goal_infos[env_idx, start:end] = infos[env_idx]
                         elif not self.dones[env_idx] and self.reached_status[env_idx]:
-                            if reached_step[env_idx] is None:
-                                # reach | [ - - -(t)] or reach | [- - - t]
-                                pass
-                            else:
-                                # [- - r(t)] or [- - r - -(t)]
-                                pass
-                        elif self.dones[env_idx] and not self.reached_status[env_idx]:
-                            # [- - - done(t)]
+                            # reached|[ - - -]  if reached_step[env_idx] is None:
+                            # [- - reached - -] if reached_step[env_idx] is not None
                             pass
                         else:
-                            # [- - - - -(t)]
+                            # [- - - done] if self.dones[env_idx] and not self.reached_status[env_idx]
+                            # [- - - - -] if not self.dones[env_idx] and not self.reached_status[env_idx]
+                            pass
+                    else:
+                        if self.dones[env_idx] and self.reached_status[env_idx]:
+                            if reached_step[env_idx] is None:
+                                # reach|[- - done(t)] -> [done, done, done(t)]
+                                start, end = 0, step + 1
+                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                            else:
+                                # [- - reach(done)(t)] -> [- - -]
+                                # [- - reach - - done(t)] -> [- - - done done done(t)]
+                                start, end = reached_step[env_idx] + 1, step + 1
+                                if end == start:
+                                    continue
+                                mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                                mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                        elif not self.dones[env_idx] and self.reached_status[env_idx]:
+                            if reached_step[env_idx] is None:
+                                # reached|[ - - t]  -> reached|[t t t]
+                                start, end = 0, step + 1
+                            else:
+                                # reached[- - r - -] -> reached|[- - - t t]
+                                start, end = reached_step[env_idx] + 1, step + 1
+                            if end == start:
+                                continue
+                            mb_goal_obs[env_idx, start:end] = mb_obs[env_idx, step]
+                            mb_goal_infos[env_idx, start:end] = infos[env_idx]
+                        else:
+                            # [- - - done(t)]  if self.dones[env_idx] and not self.reached_status[env_idx]
+                            # [- - - - (t)] if not self.dones[env_idx] and not self.reached_status[env_idx]
                             pass
             # summary
             for env_idx in range(self.nenv):
@@ -183,17 +200,26 @@ class Runner(AbstractEnvRunner):
                         if self.reached_status[env_idx]:
                             reached = 1.0
                             time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]
+                            achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                            logger.info("env_{} succ|goal:{}|final_pos:{}|size:{}".format(
+                                env_idx, self.goal_info[env_idx], achieved_pos, self.dynamics.queue.qsize()))
+                            abs_dist = 10
                         else:
                             reached = 0.0
                             time_ratio = 1.0
-                        abs_dist = deepcopy(self.goal_abs_dist[env_idx])
-                        if abs_dist is None:
+                            achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                            logger.info("env_{} fail|goal:{}|final_pos:{}|size:{}".format(
+                                env_idx, self.goal_info[env_idx], achieved_pos, self.dynamics.queue.qsize()))
                             abs_dist = abs(float(infos[env_idx]["x_pos"]) - float(self.goal_info[env_idx]["x_pos"])) + \
                                        abs(float(infos[env_idx]["y_pos"]) - float(self.goal_info[env_idx]["y_pos"]))
                         episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio,
-                                                                      abs_dist=abs_dist)
+                                                                      abs_dist=abs_dist, source=self.name,
+                                                                      x_pos=infos[env_idx]["x_pos"],
+                                                                      y_pos=infos[env_idx]["y_pos"])
                         episode_infos[env_idx]["goal_info"] = dict(x_pos=self.goal_info[env_idx]["x_pos"],
-                                                                   y_pos=self.goal_info[env_idx]["y_pos"])
+                                                                   y_pos=self.goal_info[env_idx]["y_pos"],
+                                                                   source=self.goal_info[env_idx]["source"],
+                                                                   reward_to_go=self.episode_reward_to_go[env_idx])
                         # re-plan goal
                         goal_obs, goal_info = self.dynamics.get_goal(nb_goal=1)
                         self.goal_obs[env_idx] = goal_obs[0]
@@ -202,7 +228,7 @@ class Runner(AbstractEnvRunner):
                         self.episode_step[env_idx] = 0
                         self.episode_reached_step[env_idx] = 0
                         self.reached_status[env_idx] = False
-                        self.goal_abs_dist[env_idx] = None
+                        self.episode_reward_to_go[env_idx] = 0
 
         mb_obs[:, -1] = deepcopy(self.obs)
 
@@ -271,7 +297,8 @@ class Runner(AbstractEnvRunner):
             actions = np.asarray([self.env.action_space.sample() for _ in range(self.nenv)])
             self.obs, rewards, dones, infos = self.env.step(actions)
             goal_infos = [{"x_pos": info.get("x_pos", None),
-                           "y_pos": info.get("y_pos", None)} for info in infos]
+                           "y_pos": info.get("y_pos", None),
+                           "source": self.name} for info in infos]
             mb_goal_infos.append(goal_infos)
             mb_actions.append(actions)
             mb_next_obs.append(deepcopy(self.obs))
@@ -280,10 +307,12 @@ class Runner(AbstractEnvRunner):
         mb_actions = np.asarray(mb_actions).swapaxes(1, 0)
         mb_next_obs = np.asarray(mb_next_obs).swapaxes(1, 0)
 
-        mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])
-        mb_goal_infos = mb_goal_infos.reshape(-1, )
-        mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
-        mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
+        batch_size = 100
+        ind = np.random.randint(0, init_steps, batch_size)
+        mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])[ind]
+        mb_goal_infos = mb_goal_infos.reshape(-1, )[ind]
+        mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])[ind]
+        mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])[ind]
 
         self.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_goal_infos)
         self.obs = self.env.reset()

@@ -127,6 +127,7 @@ class EpisodeStats:
 
     def feed(self, data, key):
         if key not in self.keys:
+            print("warning!{} not in init_keys".format(key))
             self.keys.append(key)
             self.episode_stats[key] = deque(self.maxlen)
         if data is None:

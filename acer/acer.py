@@ -27,16 +27,16 @@ class Acer:
         self.nupdates = 0
 
         keys = []
-        keys += ["expl_return", "expl_length", ]
-        keys += ["eval_return", "eval_length", ]
-        keys += ["goal_x_pos", "goal_y_pos", ]
-        keys += ["reached_cnt", "reached_time", "goal_abs_dist"]
+        keys += ["return_expl", "return_eval", ]
+        keys += ["length_expl", "length_eval", ]
+        keys += ["goal_x_expl", "goal_y_expl", "goal_x_eval", "goal_y_eval", "rtg"]
+        keys += ["reached_cnt", "reached_time", "goal_abs_dist", "final_x_expl", "final_y_expl", "final_x_eval", "final_y_eval"]
         keys += ["queue_max", "queue_std"]
         keys += ["int_rew_mean", "int_rew_std"]
 
         self.logger_keys = keys.copy()
         self.logger_keys.remove("reached_cnt")
-        self.episode_stats = EpisodeStats(maxlen=20, keys=keys)
+        self.episode_stats = EpisodeStats(maxlen=50, keys=keys)
 
     def call(self, on_policy, model_name=None, cnt=None):
         names_ops, values_ops = [], []
@@ -122,17 +122,22 @@ class Acer:
         for info in episode_infos:
             reached_info = info.get("reached_info")
             if reached_info:
+                source = reached_info.get("source", "")
                 self.episode_stats.feed(reached_info["reached"], "reached_cnt")
                 self.episode_stats.feed(reached_info["time_ratio"], "reached_time")
                 self.episode_stats.feed(reached_info["abs_dist"], "goal_abs_dist")
+                self.episode_stats.feed(reached_info["x_pos"], "final_x_" + source)
+                self.episode_stats.feed(reached_info["y_pos"], "final_y_" + source)
             goal_info = info.get("goal_info")
             if goal_info:
-                self.episode_stats.feed(goal_info["x_pos"], "goal_x_pos")
-                self.episode_stats.feed(goal_info["y_pos"], "goal_y_pos")
+                source = goal_info.get("source", "")
+                self.episode_stats.feed(goal_info["x_pos"], "goal_x_" + source)
+                self.episode_stats.feed(goal_info["y_pos"], "goal_y_" + source)
+                self.episode_stats.feed(goal_info["reward_to_go"], "rtg")
             return_info = info.get("episode")
             if return_info:
-                self.episode_stats.feed(return_info["l"], "{}_length".format(model_name))
-                self.episode_stats.feed(return_info["r"], "{}_return".format(model_name))
+                self.episode_stats.feed(return_info["l"], "length_{}".format(model_name))
+                self.episode_stats.feed(return_info["r"], "return_{}".format(model_name))
 
     def log(self, names_ops, values_ops):
         logger.record_tabular("total_timesteps", self.steps)
