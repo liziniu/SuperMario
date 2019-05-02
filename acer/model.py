@@ -236,7 +236,7 @@ class Model(object):
         self.initial_state = self.step_model.initial_state
         tf.global_variables_initializer().run(session=self.sess)
     
-    def train_policy(self, obs, actions, rewards, dones, mus, states, masks, steps, goal_obs):
+    def train_policy(self, obs, actions, rewards, dones, mus, states, masks, steps, goal_obs, verbose=False):
         cur_lr = self.lr.value_steps(steps)
         td_map = {self.train_model.X: obs, self.polyak_model.X: obs, self.A: actions, self.R: rewards, self.D: dones,
                   self.MU: mus, self.LR: cur_lr}
@@ -250,7 +250,14 @@ class Model(object):
             td_map[self.train_model.M] = masks
             td_map[self.polyak_model.S] = states
             td_map[self.polyak_model.M] = masks
-        return self.names_ops_policy.copy(), self.sess.run(self.run_ops_policy, td_map)[1:]  # strip off _train
+        if verbose:
+            names_ops_policy = self.names_ops_policy.copy()
+            values_ops_policy = self.sess.run(self.run_ops_policy, td_map)[1:]  # strip off _train
+        else:
+            names_ops_policy = self.names_ops_policy.copy()[:8]  # not including trust region
+            values_ops_policy = self.sess.run(self.run_ops_policy, td_map)[1:][:8]
+
+        return names_ops_policy, values_ops_policy
 
     def train_dynamics(self, obs, actions, next_obs, steps):
         cur_lr = self.lr.value_steps(steps)
