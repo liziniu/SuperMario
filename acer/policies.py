@@ -113,7 +113,8 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
         network_type = policy_network
         policy_network = get_network_builder(network_type)(**policy_kwargs)
 
-    def policy_fn(nbatch=None, nsteps=None, sess=None, observ_placeholder=None, goal_placeholder=None, concat_on_latent=False):
+    def policy_fn(nbatch=None, nsteps=None, sess=None, observ_placeholder=None, goal_placeholder=None, concat_on_latent=False,
+                  goal_encoded=None,):
         ob_space = env.observation_space
 
         X = observ_placeholder if observ_placeholder is not None else observation_placeholder(ob_space, batch_size=nbatch)
@@ -121,15 +122,18 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
 
         if normalize_observations and X.dtype == tf.float32:
             encoded_x, rms = _normalize_clip_observation(X)
-            if goal_placeholder is not None and concat_on_latent:
-                encoded_goal = tf.clip_by_value((encoded_x - rms.mean) / rms.std, -5.0, 5.0)
             extra_tensors['rms'] = rms
         else:
             encoded_x = X
+        if goal_encoded is not None:
+            assert goal_placeholder is not None
+            encoded_goal = goal_encoded
+        else:
             encoded_goal = goal_placeholder
 
         encoded_x = tf.to_float(encoded_x)
         encoded_goal = tf.to_float(encoded_goal) if goal_placeholder is not None else goal_placeholder
+
         if goal_placeholder is not None and not concat_on_latent:
             assert encoded_x.get_shape().as_list()[:-1] == encoded_goal.get_shape().as_list()[:-1]
             encoded_x = tf.concat([encoded_x, encoded_goal], axis=-1, name="concat_obs")

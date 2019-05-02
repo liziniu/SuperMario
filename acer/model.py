@@ -7,7 +7,7 @@ from baselines.a2c.utils import cat_entropy_softmax
 from baselines.a2c.utils import Scheduler, find_trainable_variables
 from baselines.a2c.utils import get_by_index, check_shape, avg_norm, q_explained_variance
 from common.util import gradient_add
-
+from baselines.common.mpi_running_mean_std import RunningMeanStd
 
 # remove last step
 def strip(var, nenvs, nsteps, flat=False):
@@ -52,9 +52,19 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 
 class Model(object):
     def __init__(self, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
-                 rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope):
+                 rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope,
+                 goal_shape):
         self.sess = get_session()
         self.nenv = nenvs
+        self.goal_shape = goal_shape
+        self.goal_as_image = goal_as_image = len(goal_shape) == 3
+        if self.goal_as_image:
+            assert self.goal_shape == ob_space.shape
+        else:
+            logger.info("normalize goal using RunningMeanStd")
+            with tf.variable_scope("RunningMeanStd", reuse=tf.AUTO_REUSE):
+                self.goal_rms = RunningMeanStd(epsilon=1e-4, shape=self.goal_shape)
+
         nact = ac_space.n
         nbatch = nenvs * nsteps
         eps = 1e-6
@@ -71,20 +81,34 @@ class Model(object):
 
             step_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_ob")
             if self.dynamics.dummy:
-                step_goal_placeholder = None
+                step_goal_placeholder, concat_on_latent, step_goal_encoded = None, None, None
             else:
-                step_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_goal")
+                if goal_as_image:
+                    step_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_goal")
+                    concat_on_latent, train_goal_encoded = False, None
+                else:
+                    step_goal_placeholder = tf.placeholder(tf.float32, (nenvs, ) + goal_shape, "step_goal")
+                    step_goal_encoded = tf.clip_by_value((step_goal_placeholder - self.goal_rms.mean)/self.goal_rms.std,
+                                                         -5., 5.)
 
             train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),)+ob_space.shape, "train_ob")
             if self.dynamics.dummy:
-                train_goal_placeholder = None
+                train_goal_placeholder, concat_on_latent, train_goal_encoded = None, None, None
             else:
-                train_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),)+ob_space.shape, "train_goal")
-
-            self.step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder,
-                                     goal_placeholder=step_goal_placeholder, sess=self.sess, concat_on_latent=False)
-            self.train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                      goal_placeholder=train_goal_placeholder, sess=self.sess, concat_on_latent=False)
+                if goal_as_image:
+                    train_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs*(nsteps+1),) + ob_space.shape, "train_goal")
+                    concat_on_latent, train_goal_encoded = False, None
+                else:
+                    train_goal_placeholder = tf.placeholder(tf.float32, (nenvs*(nsteps+1),) + goal_shape, "train_goal")
+                    concat_on_latent = True
+                    train_goal_encoded = tf.clip_by_value((train_goal_placeholder - self.goal_rms.mean)/self.goal_rms.std,
+                                                            -5., 5.)
+            self.step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder, sess=self.sess,
+                                     goal_placeholder=step_goal_placeholder, concat_on_latent=concat_on_latent,
+                                     goal_encoded=step_goal_encoded)
+            self.train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder, sess=self.sess,
+                                      goal_placeholder=train_goal_placeholder, concat_on_latent=concat_on_latent,
+                                      goal_encoded=train_goal_encoded)
 
         variables = find_trainable_variables
         params = variables(scope)
@@ -113,7 +137,8 @@ class Model(object):
 
         with tf.variable_scope(scope, custom_getter=custom_getter, reuse=True):
             self.polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                       goal_placeholder=train_goal_placeholder, sess=self.sess, concat_on_latent=False)
+                                       goal_placeholder=train_goal_placeholder, sess=self.sess,
+                                       concat_on_latent=concat_on_latent, goal_encoded=train_goal_encoded)
 
         # Notation: (var) = batch variable, (var)s = seqeuence variable, (var)_i = variable index by action at step i
 
@@ -243,6 +268,8 @@ class Model(object):
         if not self.dynamics.dummy:
             assert hasattr(self.train_model, "goals")
             assert hasattr(self.polyak_model, "goals")
+            if hasattr(self, "goal_rms"):
+                self.goal_rms.update(goal_obs)
             td_map[self.train_model.goals] = goal_obs
             td_map[self.polyak_model.goals] = goal_obs
         if states is not None:
