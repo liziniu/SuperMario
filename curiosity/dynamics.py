@@ -10,7 +10,7 @@ import baselines.common.tf_util as U
 
 
 class DummyDynamics:
-    def __init__(self):
+    def __init__(self, goal_shape):
         self.dummy = True
         self.feat_var = tf.zeros([])
         self.dyna_params = []
@@ -20,6 +20,7 @@ class DummyDynamics:
         self.aux_loss = tf.zeros([])
         self.dyna_loss = tf.zeros([])
         self.loss = tf.zeros([])
+        self.goal_shape = goal_shape
 
     def extract_feature(self, x):
         return x
@@ -29,9 +30,9 @@ class DummyDynamics:
 
     def get_goal(self, nb_goal):
         # goal_obs, goal_info
-        goal_obs = np.empty([nb_goal, ] + [84, 84, 4])
+        goal_obs = np.empty((nb_goal, ) + self.goal_shape)
         goal_obs.fill(np.nan)
-        goal_info = np.array([{} for _ in range(nb_goal)], dtype=object)
+        goal_info = np.array([{"x_pos": 0.0, "y_pos": 0.0} for _ in range(nb_goal)], dtype=object)
         return goal_obs, goal_info
 
 
