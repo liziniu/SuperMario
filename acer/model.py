@@ -85,7 +85,7 @@ class Model(object):
             else:
                 if goal_as_image:
                     step_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_goal")
-                    concat_on_latent, train_goal_encoded = False, None
+                    concat_on_latent, train_goal_encoded, step_goal_encoded = False, None, None
                 else:
                     step_goal_placeholder = tf.placeholder(tf.float32, (nenvs, ) + goal_shape, "step_goal")
                     step_goal_encoded = tf.clip_by_value((step_goal_placeholder - self.goal_rms.mean)/self.goal_rms.std,

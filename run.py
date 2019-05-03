@@ -80,7 +80,7 @@ def train(args, extra_args):
 
     if args.alg == "acer":
         if args.aux_task is None:
-            dynamics = DummyDynamics()
+            dynamics = DummyDynamics(alg_kwargs.goal_shape)
             alg_kwargs.pop("queue_size")
             alg_kwargs.pop("feat_dim")
         else:

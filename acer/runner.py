@@ -276,9 +276,9 @@ class Runner(AbstractEnvRunner):
         mb_obs[:, -1] = deepcopy(self.obs)
 
         # dummy append. Just consist with previous one.
-        mb_goals[:, -1] = mb_goals[:, -2]
-        mb_goal_infos[:, -1] = mb_goal_infos[:, -2]
-        mb_obs_infos[:, -1] = mb_obs_infos[:, -2]
+        mb_obs_infos[:, -1] = infos
+        mb_goals[:, -1] = deepcopy(self.goals)
+        mb_goal_infos[:, -1] = deepcopy(self.goal_info)
 
         if self.dist_type == "l2":
             raise NotImplementedError

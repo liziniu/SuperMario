@@ -34,7 +34,6 @@ class Acer:
         self.goal_as_image = self.model_expl.goal_as_image
 
     def call(self, on_policy, model_name=None):
-        logging = False
         names_ops, values_ops = [], []
         if model_name == "expl":
             runner = self.runner_expl
@@ -70,15 +69,13 @@ class Acer:
         names_ops_, values_ops_ = self.model_eval.train_policy(
             obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
         names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
-        if model_name == "expl" or not on_policy:
-            names_ops_, values_ops_ = self.model_expl.train_policy(
-                obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
-            names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
-            logging = True
+        names_ops_, values_ops_ = self.model_expl.train_policy(
+            obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
+        names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
         self.nupdates += 1
 
         # Logging
-        if on_policy and self.nupdates % self.log_interval == 0 and logging:
+        if on_policy and self.nupdates % self.log_interval == 0:
             self.log(names_ops, values_ops)
 
     def initialize(self):
@@ -93,13 +90,13 @@ class Acer:
     @staticmethod
     def adjust_dynamics_input_shape(results):
         # flatten on-policy data (nenv, nstep, ...) for dynamics training and put_goal
-        mb_next_obs = deepcopy(results["obs"][:, 1:])
-        mb_obs = deepcopy(results["obs"][:, :-1])
+        mb_next_obs = results["obs"][:, 1:]
+        mb_obs = results["obs"][:, :-1]
         mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])
         mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
-        mb_actions = deepcopy(results["actions"])
+        mb_actions = results["actions"]
         mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
-        mb_obs_infos = deepcopy(results["obs_infos"])
+        mb_obs_infos = results["obs_infos"][:, :-1]
         mb_obs_infos = mb_obs_infos.reshape(-1)
         return mb_obs, mb_actions, mb_next_obs, mb_obs_infos
 

@@ -7,4 +7,5 @@ python run.py \
     --alg acer \
     --num_timesteps 1e6 \
     --aux_task RF \
-    --gpu 12,13,2
+    --gpu 12,13,2 \
+    --mode 4
