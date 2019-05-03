@@ -123,10 +123,10 @@ class Buffer(object):
             goal_infos = take(self.goal_infos)
             obs_infos = take(self.obs_infos)
 
-            goal_obs, her_idx, future_idx = self.sample_goal_fn(goal_obs)
+            her_idx, future_idx = self.sample_goal_fn(dones, stacked=True)
 
+            goal_obs[her_idx] = goal_obs[future_idx]
             goal_infos[her_idx] = goal_infos[future_idx]
-            obs_infos[her_idx] = obs_infos[future_idx]
         # goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
         # goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
         if self.dist_type == "l2":
