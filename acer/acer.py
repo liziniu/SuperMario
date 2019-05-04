@@ -11,14 +11,17 @@ from acer.model import Model
 from acer.util import Acer
 from common.env_util import parser_env_id, build_env, get_env_type
 import sys
+from curiosity.dynamics import DummyDynamics, Dynamics
+from baselines.common.tf_util import get_session
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
-          log_interval=100, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
-          alpha=0.99, delta=1, replay_k=4, load_path=None, save_path=None, store_data=False, dynamics=None, env_eval=None,
-          eval_interval=300, use_eval_collect=True, use_expl_collect=True, dyna_source_list=["acer_eval", "acer_expl"],
-          dist_type="l1", use_random_policy_expl=True, goal_shape=None, **network_kwargs):
+          log_interval=10, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
+          alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
+          env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
+          dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
+          normalize_novelty=False, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -84,7 +87,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     '''
     if sys.platform == "darwin":
-        log_interval = 20
+        log_interval = 5
 
     logger.info("Running Acer with following kwargs")
     logger.info(locals())
@@ -104,57 +107,55 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     ac_space = env.action_space
 
     nstack = env.nstack
-    if dynamics.dummy:
-        raise NotImplementedError("Now only support acer with her.")
+    sess = get_session()
+    dynamics = Dynamics(sess=sess, env=env, auxiliary_task=aux_task, queue_size=queue_size, feat_dim=feat_dim, normalize_novelty=normalize_novelty)
+    dummy_dynamics = DummyDynamics(goal_shape)
+    model_exploration = Model(
+        policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
+        q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
+        rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
+        trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dynamics, scope="acer_expl",
+        goal_shape=goal_shape,)
+    model_evaluation = Model(
+        policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
+        q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
+        rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
+        trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dummy_dynamics, scope="acer_eval",
+        goal_shape=goal_shape)
+
+    def reward_fn_v1(current_state, desired_goal):
+        eps = 1e-6
+        return np.exp(-np.sum(np.square(current_state-desired_goal), -1) /
+                        (eps+np.sum(np.square(desired_goal), -1)))
+
+    def reward_fn_v2(current_pos_infos, goal_pos_infos, sparse=True):
+        assert current_pos_infos.shape == goal_pos_infos.shape
+        coeff = 0.03
+        threshold = 20
+
+        def f(current_pos, goal_pos):
+            dist = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"])) +\
+                    abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
+            if sparse:
+                rew = float(dist < threshold)
+            else:
+                rew = np.exp(-coeff * dist)
+            return rew
+        vf = np.vectorize(f)
+        mb_int_rewards = vf(current_pos_infos, goal_pos_infos)
+        return mb_int_rewards
+
+    assert dist_type in ["l1", "l2"]
+    if dist_type == "l2":
+        reward_fn = reward_fn_v1
     else:
-        from curiosity.dynamics import DummyDynamics
-        dummy_dynamics = DummyDynamics(goal_shape)
-        model_exploration = Model(
-            policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
-            q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
-            rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
-            trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dynamics, scope="acer_expl",
-            goal_shape=goal_shape,)
-        model_evaluation = Model(
-            policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
-            q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
-            rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
-            trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dummy_dynamics, scope="acer_eval",
-            goal_shape=goal_shape)
-
-        def reward_fn_v1(current_state, desired_goal):
-            eps = 1e-6
-            return np.exp(-np.sum(np.square(current_state-desired_goal), -1) /
-                          (eps+np.sum(np.square(desired_goal), -1)))
-
-        def reward_fn_v2(current_pos_infos, goal_pos_infos, sparse=True):
-            assert current_pos_infos.shape == goal_pos_infos.shape
-            coeff = 0.03
-            threshold = 20
-
-            def f(current_pos, goal_pos):
-                dist = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"])) +\
-                       abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
-                if sparse:
-                    rew = float(dist < threshold)
-                else:
-                    rew = np.exp(-coeff * dist)
-                return rew
-            vf = np.vectorize(f)
-            mb_int_rewards = vf(current_pos_infos, goal_pos_infos)
-            return mb_int_rewards
-
-        assert dist_type in ["l1", "l2"]
-        if dist_type == "l2":
-            reward_fn = reward_fn_v1
-        else:
-            reward_fn = reward_fn_v2
+        reward_fn = reward_fn_v2
 
     # we still need two runner to avoid one reset others' envs.
-    runner_expl = Runner(env=env, model=model_exploration, nsteps=nsteps, save_path=save_path, store_data=store_data,
+    runner_expl = Runner(env=env, model=model_exploration, nsteps=nsteps, store_data=store_data,
                          reward_fn=reward_fn, sample_goal=True, dist_type=dist_type, alt_model=model_evaluation,
                          use_random_policy_expl=use_random_policy_expl)
-    runner_eval = Runner(env=env_eval, model=model_evaluation, nsteps=nsteps, save_path=save_path, store_data=store_data,
+    runner_eval = Runner(env=env_eval, model=model_evaluation, nsteps=nsteps, store_data=store_data,
                          reward_fn=reward_fn, sample_goal=False, dist_type=dist_type)
 
     if replay_ratio > 0:
@@ -177,22 +178,21 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     onpolicy_cnt = 0
 
     while acer.steps < total_timesteps:
-        # logger.info("-------------------expl running-------------------")
         if use_eval_collect:
-            # logger.info("-------------------eval running-------------------")
-            acer.call(on_policy=True, model_name="eval")
+            acer.call(on_policy=True, model_name="eval", update_list=["expl", "eval"])
             acer.steps += nbatch_eval
             onpolicy_cnt += 1
         if use_expl_collect:
-            acer.call(on_policy=True, model_name="expl")
+            acer.call(on_policy=True, model_name="expl", update_list=["eval", "expl"])
             acer.steps += nbatch_expl
             onpolicy_cnt += 1
         if replay_ratio > 0:
-            n = np.random.poisson(replay_ratio)
-            for _ in range(n):
+            n = replay_ratio
+            for i in range(n):
                 if buffer.has_atleast(replay_start):
-                    # logger.info("-----------using replay buffer from expl-----------")
-                    acer.call(on_policy=False)
+                    acer.call(on_policy=False, update_list=["eval", "expl"])
+                    if i >= n//2:
+                        acer.call(on_policy=False, update_list=["expl"])
         if not use_eval_collect and onpolicy_cnt % eval_interval == 0:
             acer.evaluate(nb_eval=1)
     return model_evaluation

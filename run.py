@@ -61,7 +61,6 @@ def train(args, extra_args):
     learn = get_learn_function(args.alg)
     alg_kwargs = get_learn_function_defaults(args.alg, env_type)
     alg_kwargs.update(extra_args)
-    alg_kwargs.pop("save_path")
 
     env = build_env(env_id=args.env, num_env=args.num_env, reward_scale=args.reward_scale, env_type=args.env_type,
                     gamestate=args.gamestate, seed=args.seed, alg=args.alg)
@@ -79,25 +78,13 @@ def train(args, extra_args):
     print('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
 
     if args.alg == "acer":
-        if args.aux_task is None:
-            dynamics = DummyDynamics(alg_kwargs.goal_shape)
-            alg_kwargs.pop("queue_size")
-            alg_kwargs.pop("feat_dim")
-        else:
-            sess = get_session()
-            queue_size = alg_kwargs.pop("queue_size")
-            feat_dim = alg_kwargs.pop("feat_dim")
-            dynamics = Dynamics(sess, env, args.aux_task, queue_size, feat_dim)
-
         use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list = parse_acer_mode(args.mode)
 
         alg_kwargs["use_expl_collect"] = use_expl_collect
         alg_kwargs["use_eval_collect"] = use_eval_collect
         alg_kwargs["use_random_policy_expl"] = use_random_policy_expl
         alg_kwargs["dyna_source_list"] = dyna_source_list
-        alg_kwargs["dynamics"] = dynamics
         alg_kwargs["store_data"] = args.store_data
-        alg_kwargs["save_path"] = extra_args["save_path"]
 
     model = learn(
         env=env,
@@ -194,7 +181,6 @@ def main(args):
     import os
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     path = osp.join("logs", datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S-%f".format(args.env)))
-    extra_args["save_path"] = path
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
         rank = 0
         logger.configure(dir=path)

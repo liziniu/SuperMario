@@ -17,6 +17,7 @@ class Acer:
         self.tstart = None
         self.steps = 0
         self.nupdates = 0
+        self.log_cnt = 0
         self.dyna_source_list = dyna_source_list
 
         keys = []
@@ -33,8 +34,9 @@ class Acer:
 
         self.goal_as_image = self.model_expl.goal_as_image
 
-    def call(self, on_policy, model_name=None):
+    def call(self, on_policy, model_name=None, update_list=None):
         names_ops, values_ops = [], []
+        dyan_trained, eval_trained, expl_trained = False, False, False
         if model_name == "expl":
             runner = self.runner_expl
         else:
@@ -55,7 +57,7 @@ class Acer:
                     self.episode_stats.feed(queue_info["queue_std"], "queue_std")
                 names_ops_, values_ops_ = self.model_expl.train_dynamics(mb_obs, mb_actions, mb_next_obs, self.steps)
                 names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
-
+                dyan_trained = True
             # store useful episode information
             self.record_episode_info(results["episode_infos"], model_name)
         else:
@@ -66,17 +68,23 @@ class Acer:
         self.episode_stats.feed(np.std(int_rewards), "int_rew_std")
         # Training Policy
         assert self.model_expl.scope != self.model_eval.scope
-        names_ops_, values_ops_ = self.model_eval.train_policy(
-            obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
-        names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
-        names_ops_, values_ops_ = self.model_expl.train_policy(
-            obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
-        names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
-        self.nupdates += 1
+        if "eval" in update_list:
+            names_ops_, values_ops_ = self.model_eval.train_policy(
+                obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
+            names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
+            eval_trained = True
+            self.nupdates += 1
+        if "expl" in update_list:
+            names_ops_, values_ops_ = self.model_expl.train_policy(
+                obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
+            names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
+            expl_trained = True
 
         # Logging
-        if on_policy and self.nupdates % self.log_interval == 0:
-            self.log(names_ops, values_ops)
+        if eval_trained and dyan_trained and expl_trained:
+            self.log_cnt += 1
+            if self.log_cnt % self.log_interval == 0:
+                self.log(names_ops, values_ops)
 
     def initialize(self):
         init_steps = int(3e3)

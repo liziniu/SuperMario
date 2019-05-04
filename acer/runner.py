@@ -10,7 +10,7 @@ from baselines import logger
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, env, model, nsteps, save_path, store_data, reward_fn, sample_goal, dist_type, alt_model=None,
+    def __init__(self, env, model, nsteps, store_data, reward_fn, sample_goal, dist_type, alt_model=None,
                  use_random_policy_expl=None,):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space,
@@ -32,10 +32,10 @@ class Runner(AbstractEnvRunner):
         self.goal_shape = self.model.goal_shape
         self.goal_as_image = self.model.goal_as_image
         
-        self.save_path = save_path
+        self.save_path = os.path.join(logger.get_dir(), "runner_data")
         self.store_data = store_data
-        self.recorder = DataRecorder(save_path)
-        self.max_store_length = int(3e4)
+        self.recorder = DataRecorder(self.save_path)
+        self.max_store_length = int(1e4)
 
         self.dynamics = self.model.dynamics
         self.sample_goal = sample_goal
@@ -368,14 +368,15 @@ class Runner(AbstractEnvRunner):
         mb_actions = np.asarray(mb_actions).swapaxes(1, 0)
         mb_next_obs = np.asarray(mb_next_obs).swapaxes(1, 0)
 
-        batch_size = init_steps // 10
-        assert batch_size > 100
+        batch_size = min(128, init_steps)
         ind = np.random.randint(0, init_steps, batch_size)
         mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])[ind]
         mb_goal_infos = mb_goal_infos.reshape(-1, )[ind]
         mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])[ind]
         mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])[ind]
 
+        for i in range(10):
+            self.model.train_dynamics(mb_obs, mb_actions, mb_next_obs, 0)
         self.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_goal_infos)
         self.obs = self.env.reset()
 

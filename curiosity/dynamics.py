@@ -1,12 +1,14 @@
 from queue import PriorityQueue
 import tensorflow as tf
 from gym import spaces
-from common.util import fc
+from common.util import fc, DataRecorder
 from curiosity.auxilliary_tasks import RandomFeature, InverseDynamics, RandomNetworkDistillation
 import numpy as np
 import time
 from baselines.common.mpi_running_mean_std import RunningMeanStd
 import baselines.common.tf_util as U
+from baselines import logger
+import os
 
 
 class DummyDynamics:
@@ -37,7 +39,7 @@ class DummyDynamics:
 
 
 class Dynamics:
-    def __init__(self, sess, env, auxiliary_task, queue_size, feat_dim):
+    def __init__(self, sess, env, auxiliary_task, queue_size, feat_dim, normalize_novelty):
         self.sess = sess
         self.dummy = False
         self.make_auxiliary_task = {"RF": RandomFeature,
@@ -77,6 +79,14 @@ class Dynamics:
         self.novelty_rms = RunningMeanStd(epsilon=1e-4)
         self.novelty_normalized = tf.clip_by_value((self.novelty_tf-self.novelty_rms.mean)/self.novelty_rms.std,
                                                    -5., 5.)
+
+        self.normalized = normalize_novelty
+        if normalize_novelty:
+            logger.info("normalize novelty")
+        self.save_data = True
+        path = logger.get_dir()
+        path = os.path.join(path, "novelty_data")
+        self.recoder = DataRecorder(path)
 
     def _get_novelty(self):
         if isinstance(self.ac_space, spaces.Box):
@@ -125,8 +135,14 @@ class Dynamics:
         # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
         # self.novelty_rms.update(priority)
         novelty = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
-        self.novelty_rms.update(novelty)
-        priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
+        if self.normalized:
+            self.novelty_rms.update(novelty)
+            priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
+        else:
+            priority = - novelty
+        if self.save_data:
+            self.recoder.store({"novelty_unorm": novelty, "novelty_norm": -priority, "info": goal_infos})
+            self.recoder.dump()
         stats = self._add_goal(obs, actions, next_obs, goal_infos, priority)
         return stats
 
@@ -145,8 +161,14 @@ class Dynamics:
             goal_next_obs = np.asarray(goal_next_obs)
             novelty = self.sess.run(self.novelty, feed_dict={self.obs: goal_obs, self.ac: goal_act,
                                                              self.next_obs: goal_next_obs})
-            self.novelty_rms.update(novelty)
-            priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
+            if self.normalized:
+                self.novelty_rms.update(novelty)
+                priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
+            else:
+                priority = - novelty
+            if self.save_data:
+                self.recoder.store({"novelty_unorm": novelty, "novelty_norm": -priority, "info": goal_info})
+                self.recoder.dump()
             self._add_goal(goal_obs, goal_act, goal_next_obs, goal_info, priority)
         assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goal_obs.shape)
         # goal_feat = self.sess.run(self.feat, feed_dict={self.obs: goal_obs})
