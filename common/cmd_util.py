@@ -45,7 +45,7 @@ def common_arg_parser():
     parser.add_argument('--store_data', default=False, action='store_true')
     parser.add_argument('--aux_task', help='auxiliary task type(for acer/curiosity)', type=str, choices=["RF", "RND", "IDF"])
     parser.add_argument('--gpu', type=str, default="12,13,2")
-    parser.add_argument('--mode', type=int, default=1, choices=[1, 2, 3, 4])
+    parser.add_argument('--mode', type=int, default=1, choices=[1, 2, 3, 4, 5])
     return parser
 
 

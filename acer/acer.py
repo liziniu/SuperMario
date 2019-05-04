@@ -15,7 +15,7 @@ import sys
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
-          log_interval=100, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
+          log_interval=100, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, save_path=None, store_data=False, dynamics=None, env_eval=None,
           eval_interval=300, use_eval_collect=True, use_expl_collect=True, dyna_source_list=["acer_eval", "acer_expl"],
           dist_type="l1", use_random_policy_expl=True, goal_shape=None, **network_kwargs):

@@ -29,7 +29,7 @@ class Acer:
 
         self.logger_keys = keys.copy()
         self.logger_keys.remove("reached_cnt")
-        self.episode_stats = EpisodeStats(maxlen=50, keys=keys)
+        self.episode_stats = EpisodeStats(maxlen=10, keys=keys)
 
         self.goal_as_image = self.model_expl.goal_as_image
 
