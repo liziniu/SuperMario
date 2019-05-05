@@ -8,6 +8,7 @@ from baselines.a2c.utils import Scheduler, find_trainable_variables
 from baselines.a2c.utils import get_by_index, check_shape, avg_norm, q_explained_variance
 from common.util import gradient_add
 from baselines.common.mpi_running_mean_std import RunningMeanStd
+import numpy as np
 
 # remove last step
 def strip(var, nenvs, nsteps, flat=False):
@@ -51,10 +52,10 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 
 
 class Model(object):
-    def __init__(self, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
+    def __init__(self, sess, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
                  rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope,
                  goal_shape):
-        self.sess = get_session()
+        self.sess = sess
         self.nenv = nenvs
         self.goal_shape = goal_shape
         self.goal_as_image = goal_as_image = len(goal_shape) == 3
@@ -111,7 +112,7 @@ class Model(object):
                                       goal_encoded=train_goal_encoded)
 
         variables = find_trainable_variables
-        params = variables(scope)
+        self.params = params = variables(scope)
         logger.info("========================== {} =============================".format(scope))
         for var in params:
             logger.info(var)
@@ -286,12 +287,18 @@ class Model(object):
 
         return names_ops_policy, values_ops_policy
 
-    def train_dynamics(self, obs, actions, next_obs, steps):
-        cur_lr = self.lr.value_steps(steps)
-        td_map = {self.dynamics.obs: obs, self.dynamics.next_obs: next_obs, self.dynamics.ac: actions,
-                  self.LR: cur_lr}
-        return self.name_ops_dynamics.copy(), self.sess.run(self.run_ops_dynamics, td_map)[1:]
-    
+    def train_dynamics(self, obs, actions, next_obs, steps, nb_epoch=1):
+        value_ops_dynamics = []
+        for epoch in range(nb_epoch):
+            cur_lr = self.lr.value_steps(steps)
+            td_map = {self.dynamics.obs: obs, self.dynamics.next_obs: next_obs, self.dynamics.ac: actions,
+                      self.LR: cur_lr}
+            value = self.sess.run(self.run_ops_dynamics, td_map)[1:]
+            value_ops_dynamics.append(value)
+        value_ops_dynamics = np.asarray(value_ops_dynamics)
+        value_ops_dynamics = list(np.mean(value_ops_dynamics, axis=0))
+        return self.name_ops_dynamics.copy(), value_ops_dynamics
+
     def step(self, observation, **kwargs):
         return self.step_model.evaluate([self.step_model.action, self.step_model_p, self.step_model.state],
                                         observation, **kwargs)
