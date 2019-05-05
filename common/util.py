@@ -145,3 +145,9 @@ class EpisodeStats:
             return np.round(np.sum(self.episode_stats[key]), 4)
         else:
             return 0.
+
+    def get_last(self, key):
+        if self.episode_stats[key]:
+            return self.episode_stats[key][-1]
+        else:
+            return 0.

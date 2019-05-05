@@ -85,6 +85,7 @@ def train(args, extra_args):
         alg_kwargs["use_random_policy_expl"] = use_random_policy_expl
         alg_kwargs["dyna_source_list"] = dyna_source_list
         alg_kwargs["store_data"] = args.store_data
+        alg_kwargs["aux_task"] = args.aux_task
 
     model = learn(
         env=env,
