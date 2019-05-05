@@ -3,6 +3,9 @@ import numpy as np
 from baselines import logger
 from common.util import EpisodeStats
 from copy import deepcopy
+from baselines.common.tf_util import save_variables, get_session
+import functools
+import os
 
 
 class Acer:
@@ -34,9 +37,12 @@ class Acer:
 
         self.goal_as_image = self.model_expl.goal_as_image
 
+        params = self.model_expl.params + self.model_eval.params + self.model_expl.params
+        self.save = functools.partial(save_variables, sess=self.model_expl.sess, variables=params)
+
     def call(self, on_policy, model_name=None, update_list=None):
         names_ops, values_ops = [], []
-        dyan_trained, eval_trained, expl_trained = False, False, False
+        dyna_trained, eval_trained, expl_trained = False, False, False
         if model_name == "expl":
             runner = self.runner_expl
         else:
@@ -57,7 +63,7 @@ class Acer:
                     self.episode_stats.feed(queue_info["queue_std"], "queue_std")
                 names_ops_, values_ops_ = self.model_expl.train_dynamics(mb_obs, mb_actions, mb_next_obs, self.steps)
                 names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
-                dyan_trained = True
+                dyna_trained = True
             # store useful episode information
             self.record_episode_info(results["episode_infos"], model_name)
         else:
@@ -81,10 +87,14 @@ class Acer:
             expl_trained = True
 
         # Logging
-        if eval_trained and dyan_trained and expl_trained:
-            self.log_cnt += 1
+        if eval_trained and dyna_trained and expl_trained:
             if self.log_cnt % self.log_interval == 0:
+                names_ops_, values_ops_ = self.model_expl.dynamics.evaluate(self.steps)
+                names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
                 self.log(names_ops, values_ops)
+            self.log_cnt += 1
+            if self.log_cnt % 1000 == 0:
+                self.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(self.steps)))
 
     def initialize(self):
         init_steps = int(3e3)
@@ -173,7 +183,10 @@ class Acer:
         logger.record_tabular("time_elapse(min)", int(time.time() - self.tstart) // 60)
         logger.record_tabular("nupdates", self.nupdates)
         for key in self.logger_keys:
-            logger.record_tabular(key, self.episode_stats.get_mean(key))
+            if key == "goal_x" or key == "goal_y":
+                logger.record_tabular(key, self.episode_stats.get_last(key))
+            else:
+                logger.record_tabular(key, self.episode_stats.get_mean(key))
         logger.record_tabular("reached_ratio", self.episode_stats.get_sum("reached_cnt") / self.episode_stats.maxlen)
         for name, val in zip(names_ops, values_ops):
             logger.record_tabular(name, float(val))
