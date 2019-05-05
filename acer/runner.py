@@ -35,6 +35,7 @@ class Runner(AbstractEnvRunner):
         self.save_path = os.path.join(logger.get_dir(), "runner_data")
         self.store_data = store_data
         self.recorder = DataRecorder(self.save_path)
+        self.goal_recorder = DataRecorder(self.save_path.replace("runner_data", "goal_data"))
         self.max_store_length = int(1e4)
 
         self.dynamics = self.model.dynamics
@@ -59,7 +60,7 @@ class Runner(AbstractEnvRunner):
         if self.use_random_policy_expl:
             assert alt_model is not None
 
-    def run(self):
+    def run(self, acer_step=None):
         if self.goals is None:
             self.goals, self.goal_info = self.dynamics.get_goal(nb_goal=self.nenv)
             if not self.goal_as_image:
@@ -241,15 +242,19 @@ class Runner(AbstractEnvRunner):
                             reached = 1.0
                             time_ratio = self.episode_reached_step[env_idx] / self.episode_step[env_idx]
                             achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
-                            logger.info("env_{} succ|goal:{}|final_pos:{}|size:{}".format(
-                                env_idx, self.goal_info[env_idx], achieved_pos, self.dynamics.queue.qsize()))
+                            mem = dict(env=env_idx, is_succ=True, goal=self.goal_info[env_idx], final_pos=achieved_pos,
+                                       timestep=acer_step, episode=self.episode[env_idx], step=self.episode_step[env_idx])
+                            self.goal_recorder.store(mem)
+                            self.log(mem)
                             abs_dist = 10
                         else:
                             reached = 0.0
                             time_ratio = 1.0
                             achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
-                            logger.info("env_{} fail|goal:{}|final_pos:{}|size:{}".format(
-                                env_idx, self.goal_info[env_idx], achieved_pos, self.dynamics.queue.qsize()))
+                            mem = dict(env=env_idx, is_succ=False, goal=self.goal_info[env_idx], final_pos=achieved_pos,
+                                       timestep=acer_step, episode=self.episode[env_idx], step=self.episode_step[env_idx])
+                            self.goal_recorder.store(mem)
+                            self.log(mem)
                             abs_dist = abs(float(infos[env_idx]["x_pos"]) - float(self.goal_info[env_idx]["x_pos"])) + \
                                        abs(float(infos[env_idx]["y_pos"]) - float(self.goal_info[env_idx]["y_pos"]))
                         episode_infos[env_idx]["reached_info"] = dict(reached=reached, time_ratio=time_ratio,
@@ -287,6 +292,7 @@ class Runner(AbstractEnvRunner):
         # shapes are adjusted to [nenv, nsteps, []]
         enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
 
+        self.goal_recorder.dump()
         results = dict(
             enc_obs=enc_obs,
             obs=mb_obs,
@@ -404,6 +410,13 @@ class Runner(AbstractEnvRunner):
         eval_info["l"] /= nb_eval
         eval_info["r"] /= nb_eval
         return eval_info
+
+    def log(self, mem):
+        succ = "succ" if mem["is_succ"] else "fail"
+        template = "env_{} {}|goal:{}|final_pos:{}|size:{}".format(
+            mem["env"], succ, mem["goal"], mem["final_pos"], self.dynamics.queue.qsize()
+        )
+        logger.info(template)
 
 
 if __name__ == "__main__":

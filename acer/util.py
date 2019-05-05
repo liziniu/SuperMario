@@ -50,7 +50,7 @@ class Acer:
 
         if on_policy:
             # collect data
-            results = runner.run()
+            results = runner.run(acer_step=self.steps)
             self.buffer.put(results["enc_obs"], results["actions"], results["ext_rewards"], results["mus"],
                             results["dones"], results["masks"], results["goal_obs"], results["goal_infos"],
                             results["obs_infos"])
