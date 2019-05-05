@@ -17,7 +17,7 @@ from baselines.common.tf_util import get_session
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
-          log_interval=10, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
+          log_interval=50, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
           dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
@@ -111,13 +111,13 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     dynamics = Dynamics(sess=sess, env=env, auxiliary_task=aux_task, queue_size=queue_size, feat_dim=feat_dim, normalize_novelty=normalize_novelty)
     dummy_dynamics = DummyDynamics(goal_shape)
     model_exploration = Model(
-        policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
+        sess=sess, policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
         q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
         rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
         trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dynamics, scope="acer_expl",
         goal_shape=goal_shape,)
     model_evaluation = Model(
-        policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
+        sess=sess, policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
         q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
         rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
         trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dummy_dynamics, scope="acer_eval",
@@ -190,9 +190,11 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             n = replay_ratio
             for i in range(n):
                 if buffer.has_atleast(replay_start):
-                    acer.call(on_policy=False, update_list=["eval", "expl"])
-                    if i >= n//2:
-                        acer.call(on_policy=False, update_list=["expl"])
+                    if i < n//2:
+                        acer.call(on_policy=False, update_list=["expl", "eval"])
+                    else:
+                        pass
+                        # acer.call(on_policy=False, update_list=["expl"])
         if not use_eval_collect and onpolicy_cnt % eval_interval == 0:
             acer.evaluate(nb_eval=1)
     return model_evaluation

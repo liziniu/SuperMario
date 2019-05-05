@@ -5,5 +5,5 @@ def atari():
         feat_dim=512,
         replay_start=200,
         goal_shape=(84, 84, 4),  #(512, )
-        normalize_novelty=False,
+        normalize_novelty=True,
     )
