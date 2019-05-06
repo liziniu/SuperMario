@@ -3,7 +3,7 @@ import numpy as np
 from baselines import logger
 from baselines.common import set_global_seeds
 from acer.policies import build_policy
-from baselines.common.vec_env.vec_frame_stack import VecFrameStack
+from common.env_util import VecFrameStack
 from acer.buffer import Buffer
 from acer.runner import Runner
 from common.her_sample import make_sample_her_transitions
@@ -13,6 +13,7 @@ from common.env_util import parser_env_id, build_env, get_env_type
 import sys
 from curiosity.dynamics import DummyDynamics, Dynamics
 from baselines.common.tf_util import get_session
+import os
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
@@ -21,7 +22,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
           dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
-          normalize_novelty=False, **network_kwargs):
+          normalize_novelty=False, save_model=False, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -168,7 +169,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     nbatch_expl = nenvs*nsteps
     nbatch_eval = nenvs_eval*nsteps
 
-    acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer, log_interval, dyna_source_list)
+    acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer, log_interval, dyna_source_list, save_model)
     acer.tstart = time.time()
 
     # === init to make sure we can get goal ===
@@ -197,4 +198,6 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                         # acer.call(on_policy=False, update_list=["expl"])
         if not use_eval_collect and onpolicy_cnt % eval_interval == 0:
             acer.evaluate(nb_eval=1)
+    acer.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(acer.steps)))
+
     return model_evaluation

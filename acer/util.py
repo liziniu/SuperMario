@@ -9,7 +9,7 @@ import os
 
 
 class Acer:
-    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval, dyna_source_list):
+    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval, dyna_source_list, save_model):
         self.runner_expl = runner_expl
         self.runner_eval = runner_eval
         self.model_expl = model_expl
@@ -22,6 +22,7 @@ class Acer:
         self.nupdates = 0
         self.log_cnt = 0
         self.dyna_source_list = dyna_source_list
+        self.save_model = save_model
 
         keys = []
         keys += ["expl_return", "eval_return", "expl_length", "eval_length"]
@@ -93,7 +94,7 @@ class Acer:
                 names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
                 self.log(names_ops, values_ops)
             self.log_cnt += 1
-            if self.log_cnt % 1000 == 0:
+            if self.log_cnt % 1000 == 0 and self.save_model:
                 self.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(self.steps)))
 
     def initialize(self):
