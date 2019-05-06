@@ -1,12 +1,20 @@
 import numpy as np
 from baselines.common.runners import AbstractEnvRunner
-from baselines.common.vec_env.vec_frame_stack import VecFrameStack
+from common.env_util import VecFrameStack
 from gym import spaces
 from common.util import DataRecorder, ResultsWriter
 import time
 import os
 from copy import deepcopy
 from baselines import logger
+
+
+def check_obs(obs):
+    nenv, nc = obs.shape[0], obs.shape[-1]
+    for i in range(nenv):
+        for c in range(nc):
+            if np.sum(obs[i][:, :, c]) == 0:
+                raise ValueError
 
 
 class Runner(AbstractEnvRunner):
@@ -22,7 +30,7 @@ class Runner(AbstractEnvRunner):
         self.nbatch = nenv * nsteps
         self.batch_ob_shape = (nenv * (nsteps + 1),) + env.observation_space.shape
 
-        self.obs = env.reset()
+        # self.obs = env.reset()  super method do this
         self.obs_dtype = env.observation_space.dtype
         self.obs_shape = env.observation_space.shape
         self.ac_dtype = env.action_space.dtype
@@ -83,6 +91,11 @@ class Runner(AbstractEnvRunner):
 
         episode_infos = np.asarray([{} for _ in range(self.nenv)], dtype=object)
         for step in range(self.nsteps):
+            try:
+                check_obs(self.obs)
+            except ValueError:
+                logger.warn("acer_step:{}, runner_step:{}, empty obs".format(acer_step, step))
+                raise ValueError
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
             if self.sample_goal:
                 if self.use_random_policy_expl:
@@ -417,7 +430,6 @@ class Runner(AbstractEnvRunner):
             mem["env"], succ, mem["goal"], mem["final_pos"], self.dynamics.queue.qsize()
         )
         logger.info(template)
-
 
 if __name__ == "__main__":
     # test vectorize f
