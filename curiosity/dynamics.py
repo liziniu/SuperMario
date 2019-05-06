@@ -100,10 +100,10 @@ class Dynamics:
         self.normalized = normalize_novelty
         if normalize_novelty:
             logger.info("normalize novelty")
-        self.save_data = True
         path = logger.get_dir()
-        path = os.path.join(path, "novelty_data")
-        self.recoder = DataRecorder(path)
+        path = os.path.join(path, "goal_data")
+        self.goal_recoder = DataRecorder(path)
+        self.goal_store_baseline = 500
 
         self.density_estimate = deque(maxlen=int(1e4))
 
@@ -162,9 +162,7 @@ class Dynamics:
         assert list(next_obs.shape)[1:] == self.next_obs.get_shape().as_list()[1:], "next obs shape:{}.please flatten obs".format(next_obs.shape)
         assert len(goal_infos.shape) == 1, "info shape:{}".format(goal_infos.shape)
 
-        # if aux_task is not RF, there may should have normalize schedule to ensure proper scale.
-        # self.novelty_rms.update(priority)
-        novelty = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
+        # sample goal according to x_pos
         x_pos = [info["x_pos"] for info in goal_infos]
         for index, x in enumerate(x_pos):
             seg = x // self.eval_interval * self.eval_interval
@@ -176,29 +174,30 @@ class Dynamics:
                                        "next_obs": next_obs[index], "info": goal_infos[index]})
                 self.eval_data_status[seg] = True
                 self.eval_data = sorted(self.eval_data, key=lambda y: y["info"]["x_pos"])
-        # novelty = get_dist(goal_infos)
+        if np.max(x_pos) > self.goal_store_baseline:
+            self.goal_recoder.store(self.eval_data)
+            self.goal_recoder.dump()
+            self.goal_store_baseline += 500
+            logger.info("store {} goal.now baseline:{}".format(len(self.eval_data), self.goal_store_baseline))
+        # store goal into queue according to priority.
+        novelty = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
         if self.normalized:
             self.novelty_rms.update(novelty)
             priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
         else:
             priority = - novelty
-        if self.save_data:
-            self.recoder.store({"novelty_unorm": novelty, "novelty_norm": -priority, "info": goal_infos})
-            self.recoder.dump()
         stats = self._add_goal(obs, actions, next_obs, goal_infos, priority)
         return stats
 
-    def get_goal(self, nb_goal, replace=True, average=False, debug=False):
-        if debug:
-            queue_before = sorted([x[0] for x in self.queue.queue])
+    def get_goal(self, nb_goal, replace=True, average=False):
         assert self.queue.qsize() >= nb_goal
         goal_priority, goal_feat, goal_obs, goal_act, goal_next_obs, goal_info = [], [], [], [], [], []
         while len(goal_obs) != nb_goal:
             data = self.queue.get()
-            if (39 <= data[5]["x_pos"] <= 40) and (162 <= data[5]["y_pos"] <= 176):
+            if (data[5]["x_pos"] <= 55) and (data[5]["y_pos"] <= 180):
                 self.error_recoder.store(data)
                 self.error_recoder.dump()
-                logger.info("detecting an error goal:{}".format(data[5]))
+                logger.info("detecting an error goal:{} and remove it".format(data[5]))
                 continue
             goal_priority.append(data[0])
             goal_obs.append(data[2])
@@ -218,18 +217,10 @@ class Dynamics:
             else:
                 priority = - novelty
             if average:
-                priority = 0.8 * priority + 0.2 * goal_priority
-            if self.save_data:
-                self.recoder.store({"novelty_unorm": novelty, "novelty_norm": -priority, "info": goal_info})
-                self.recoder.dump()
+                alpha = 0.8
+                priority = alpha * priority + (1-alpha) * goal_priority
             self._add_goal(goal_obs, goal_act, goal_next_obs, goal_info, priority)
         assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goal_obs.shape)
-        if debug:
-            assert replace is True
-            queue_after = sorted([x[0] for x in self.queue.queue])
-            for i in range(len(queue_before)):
-                if queue_before[i] != queue_after[i]:
-                    raise ValueError("Index:{}, before:{}, after:{}".format(i, queue_before[i], queue_after[i]))
         return goal_obs, goal_info
 
     def _add_goal(self, obs, actions, next_obs, infos, priority):
