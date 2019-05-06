@@ -5,11 +5,14 @@ from gym import spaces
 import pickle
 from baselines import logger
 from queue import PriorityQueue
+from common.util import DataRecorder
+import os
+from copy import deepcopy
 
 
 class Runner(AbstractEnvRunner):
 
-    def __init__(self, env, model, nsteps, load_path, reward_fn):
+    def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space, spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
         assert isinstance(env, VecFrameStack)
@@ -24,11 +27,16 @@ class Runner(AbstractEnvRunner):
         self.ac_dtype = env.action_space.dtype
         self.nstack = self.env.nstack
         self.nc = self.batch_ob_shape[-1] // self.nstack
+        
+        self.recoder = DataRecorder(os.path.join(logger.get_dir(), "runner_data"))
 
+        self.desired_x_pos = desired_x_pos
         self.load_path = load_path
-        self.buffer = PriorityQueue()
+        self.x_pos, self.goal_index_sorted = None, None
+        self.buffer = []
         self.initialize()
         self.goals, self.goal_infos = self.get_goal(self.nenv)
+        self.episode_step = np.zeros(self.nenv, dtype=np.int32)
 
         self.reward_fn = reward_fn
 
@@ -37,6 +45,7 @@ class Runner(AbstractEnvRunner):
         enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
         mb_obs, mb_actions, mb_mus, mb_dones, mb_rewards, mb_goals = [], [], [], [], [], [],
         mb_obs_infos, mb_goal_infos = [], []
+        episode_info = {}
         for _ in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
             mb_obs.append(np.copy(self.obs))
@@ -46,14 +55,38 @@ class Runner(AbstractEnvRunner):
             mb_goals.append(np.copy(self.goals))
             mb_goal_infos.append(np.copy(self.goal_infos))
             obs, rewards, dones, infos = self.env.step(actions)
-
+            self.episode_step += 1
             for env_idx in range(self.nenv):
                 reached = self.check_goal_reached_v2(infos[env_idx], self.goal_infos[env_idx])
                 if reached:
+                    final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                    mem = dict(env=env_idx, succ=True, length=self.episode_step[env_idx], final_pos=final_pos)
+                    self.recoder.store(mem)
+                    logger.info("env_{} succ!|goal:{}|final_pos:{}|length:{}".format(
+                        env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
+                    episode_info["succ"] = True
+                    episode_info["length"] = self.episode_step[env_idx]
+                    episode_info["final_pos"] = final_pos
+                    self.episode_step[env_idx] = 0
+
                     assert self.nenv == 1
-                    obs = self.env.reset()
                     dones[:] = True
-                    self.goals, self.goal_infos = self.step_goal()
+                    obs = self.env.reset()
+                    # self.goals, self.goal_infos = self.step_goal()
+                elif dones[env_idx]:
+                    # self.goals, self.goal_infos = self.step_goal()
+
+                    final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                    mem = dict(env=env_idx, succ=True, length=self.episode_step[env_idx], final_pos=final_pos)
+                    self.recoder.store(mem)
+                    logger.info("env_{} fail!|goal:{}|final_pos:{}|length:{}".format(
+                        env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
+                    episode_info["succ"] = False
+                    episode_info["length"] = self.episode_step[env_idx]
+                    episode_info["final_pos"] = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                    if infos[env_idx].get("episode"):
+                        episode_info["episode"] = infos[env_idx].get("episode")
+                    self.episode_step[env_idx] = 0
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
@@ -96,39 +129,21 @@ class Runner(AbstractEnvRunner):
             masks=mb_masks,
             goals=mb_goals,
             obs_infos=mb_obs_infos,
-            goal_infos=mb_goal_infos
+            goal_infos=mb_goal_infos,
+            episode_info=episode_info,
         )
         return results
 
-    def step_goal(self, strategy="max"):
-        if strategy == "max":
-            goals, goal_infos = [], []
-            item = self.buffer.get()
-            for i in range(self.nenv):
-                goal, info = item[2], [3]
-                goals.append(goal)
-                goal_infos.append(info)
-            goals = np.asarray(goals, dtype=goal.dtype)
-            goal_infos = np.asarray(goal_infos, dtype=object)
-            self.buffer.put(item)
-        else:
-            raise NotImplementedError
-
-        return goals, goal_infos
-
-    def get_goal(self, nb_goal, strategy="max"):
-        if strategy == "max":
-            goals, goal_infos = [], []
-            item = self.buffer.get()
-            for i in range(nb_goal):
-                goal, info = item[2], item[3]
-                goals.append(goal)
-                goal_infos.append(info)
-            goals = np.asarray(goals, dtype=goal.dtype)
-            goal_infos = np.asarray(goal_infos, dtype=object)
-            self.buffer.put(item)
-        else:
-            raise NotImplementedError
+    def get_goal(self, nb_goal):
+        goals, goal_infos = [], []
+        for i in range(nb_goal):
+            index = self.goal_index_sorted[i]
+            data = self.buffer[index]
+            goal, goal_info = data[0], data[1]
+            goals.append(goal)
+            goal_infos.append(goal_info)
+        goals = np.asarray(goals, dtype=goal.dtype)
+        goal_infos = np.asarray(goal_infos, dtype=object)
         return goals, goal_infos
 
     def initialize(self):
@@ -141,12 +156,20 @@ class Runner(AbstractEnvRunner):
                 logger.info(e)
                 break
         obs = np.asarray([x["obs"] for x in data])
-        x_pos = np.asarray([x["info"]["x_pos"] for x in data])
+        self.x_pos = x_pos = np.asarray([x["info"]["x_pos"] for x in data])
         y_pos = np.asarray([x["info"]["y_pos"] for x in data])
         logger.info("loading {} goals".format(len(obs)))
-        priority = - x_pos
+        logger.info("goal_x_pos:{}".format(x_pos))
         for i in range(len(obs)):
-            self.buffer.put([priority[i], i, obs[i], {"x_pos": x_pos[i], "y_pos": y_pos[i]}])
+            self.buffer.append([obs[i], {"x_pos": x_pos[i], "y_pos": y_pos[i]}])
+
+        dist = list(np.abs(self.x_pos - self.desired_x_pos))
+        dist_copy = deepcopy(dist)
+        dist_copy.sort()
+        self.goal_index_sorted = []
+        for d in dist_copy:
+            index = dist.index(d)
+            self.goal_index_sorted.append(index)
 
     @staticmethod
     def check_goal_reached_v2(obs_info, goal_info):

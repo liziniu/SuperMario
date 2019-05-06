@@ -18,7 +18,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, eval_interval=300, dist_type="l1",
-          save_model=False, simple_store=True, goal_shape=(84, 84, 4), nb_train_epoch=4,
+          save_model=False, simple_store=True, goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None,
           **network_kwargs):
 
     '''
@@ -142,7 +142,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         reward_fn = reward_fn_v2
 
     # we still need two runner to avoid one reset others' envs.
-    runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, load_path=load_path)
+    runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, load_path=load_path,
+                    desired_x_pos=desired_x_pos)
 
     if replay_ratio > 0:
         sample_goal_fn = make_sample_her_transitions("future", replay_k)

@@ -16,12 +16,12 @@ class Acer:
         self.buffer = buffer
         self.log_interval = log_interval
         self.tstart = None
-        self.keys = ["rewards", "length"]
+        self.keys = ["episode_return", "episode_length", "succ_ratio", "succ_length", "final_x_pos", "final_y_pos"]
         self.episode_stats = EpisodeStats(maxlen=10, keys=self.keys)
         self.steps = 0
 
         sess = self.model.sess
-        self.save = functools.partial(save_variables, sess=sess, params=self.model.params)
+        self.save = functools.partial(save_variables, sess=sess, variables=self.model.params)
 
     def call(self, replay_start, nb_train_epoch):
         runner, model, buffer, steps = self.runner, self.model, self.buffer, self.steps
@@ -30,6 +30,7 @@ class Acer:
         if buffer is not None:
             buffer.put(results["enc_obs"], results["actions"], results["ext_rewards"], results["mus"], results["dones"],
                        results["masks"], results["goals"], results["goal_infos"], results["obs_infos"])
+        self.record_episode_info(results["episode_info"])
 
         if buffer.has_atleast(replay_start):
             names_ops, values_ops = [], []
@@ -40,13 +41,9 @@ class Acer:
                     obs, actions, int_rewards, dones, mus, model.initial_state, masks, steps, goal_obs)
 
             if int(steps/runner.nbatch) % self.log_interval == 0:
-                logger.record_tabular("total_timesteps", steps)
-                logger.record_tabular("fps", int(steps/(time.time() - self.tstart)))
-                for name, val in zip(names_ops, values_ops):
-                    logger.record_tabular(name, float(val))
-                logger.dump_tabular()
+                self.log(names_ops, values_ops)
 
-                if int(steps/runner.nbatch) % (self.log_interval * 100) == 0:
+                if int(steps/runner.nbatch) % (self.log_interval * 200) == 0:
                     self.save(os.path.join(logger.get_dir(), "{}.pkl".format(self.steps)))
 
     def adjust_shape(self, results):
@@ -61,3 +58,28 @@ class Acer:
         int_rewards = results["int_rewards"].reshape([runner.nbatch])
         goal_obs = results["goal_obs"].reshape(runner.batch_ob_shape)
         return obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs
+
+    def record_episode_info(self, episode_info):
+        returns = episode_info.get("episode", None)
+        succ = episode_info.get("succ", None)
+        length = episode_info.get("length", None)
+        final_pos = episode_info.get("final_pos", None)
+        if returns:
+            self.episode_stats.feed(returns["r"], "episode_return")
+        if length:
+            self.episode_stats.feed(length, "episode_length")
+        if succ:
+            self.episode_stats.feed(length, "succ_ratio")
+            self.episode_stats.feed(length, "succ_length")
+        if final_pos:
+            self.episode_stats.feed(final_pos["x_pos"], "final_x_pos")
+            self.episode_stats.feed(final_pos["y_pos"], "final_y_pos")
+
+    def log(self, names_ops, values_ops):
+        logger.record_tabular("total_timesteps", self.steps)
+        logger.record_tabular("fps", int(self.steps / (time.time() - self.tstart)))
+        for name, val in zip(names_ops, values_ops):
+            logger.record_tabular(name, float(val))
+        for key in self.keys:
+            logger.record_tabular(key, self.episode_stats.get_mean(key))
+        logger.dump_tabular()
