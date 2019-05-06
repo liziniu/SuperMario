@@ -17,6 +17,15 @@ def check_obs(obs):
                 raise ValueError
 
 
+def check_infos(infos):
+    stage, world = infos[0].get("stage"), infos[0].get("world")
+    for info in infos[1:]:
+        if info.get("stage") != stage:
+            raise ValueError
+        if info.get("world") != stage:
+            raise ValueError
+
+
 class Runner(AbstractEnvRunner):
     def __init__(self, env, model, nsteps, store_data, reward_fn, sample_goal, dist_type, alt_model=None,
                  use_random_policy_expl=None,):
@@ -39,12 +48,10 @@ class Runner(AbstractEnvRunner):
         self.nc = self.batch_ob_shape[-1] // self.nstack
         self.goal_shape = self.model.goal_shape
         self.goal_as_image = self.model.goal_as_image
-        
+
         self.save_path = os.path.join(logger.get_dir(), "runner_data")
         self.store_data = store_data
-        self.recorder = DataRecorder(self.save_path)
-        self.goal_recorder = DataRecorder(self.save_path.replace("runner_data", "goal_data"))
-        self.max_store_length = int(1e4)
+        self.goal_recorder = DataRecorder(self.save_path)
 
         self.dynamics = self.model.dynamics
         self.sample_goal = sample_goal
@@ -113,13 +120,15 @@ class Runner(AbstractEnvRunner):
             mb_masks[:, step] = deepcopy(self.dones)
 
             obs, rewards, dones, infos = self.env.step(actions)
+            check_infos(infos)
+            for info in infos:
+                info.update({"source": self.name})
+
             enc_obs.append(obs[..., -self.nc:])
             mb_dones[:, step] = dones
             mb_ext_rew[:, step] = rewards
             self.episode_reward_to_go[self.reached_status] += rewards[self.reached_status]
-
-            mb_obs_infos[:, step] = np.asarray(
-                [{"x_pos": info["x_pos"], "y_pos": info["y_pos"], "source": self.name} for info in infos], dtype=object)
+            mb_obs_infos[:, step] = np.asarray(infos, dtype=object)
             mb_goals[:, step] = deepcopy(self.goals)
             mb_goal_infos[:, step] = deepcopy(self.goal_info)
             self.episode_step += 1
@@ -295,8 +304,8 @@ class Runner(AbstractEnvRunner):
 
         # dummy append. Just consist with previous one.
         mb_obs_infos[:, -1] = infos
-        mb_goals[:, -1] = deepcopy(self.goals)
-        mb_goal_infos[:, -1] = deepcopy(self.goal_info)
+        mb_goals[:, -1] = mb_goals[:, -2]
+        mb_goal_infos[:, -1] = mb_goal_infos[:, -2]
 
         if self.dist_type == "l2":
             raise NotImplementedError
@@ -427,7 +436,8 @@ class Runner(AbstractEnvRunner):
     def log(self, mem):
         succ = "succ" if mem["is_succ"] else "fail"
         template = "env_{} {}|goal:{}|final_pos:{}|size:{}".format(
-            mem["env"], succ, mem["goal"], mem["final_pos"], self.dynamics.queue.qsize()
+            mem["env"], succ, {"x_pos": mem["goal"]["x_pos"], "y_pos": mem["goal"]["y_pos"]},
+            mem["final_pos"], self.dynamics.queue.qsize()
         )
         logger.info(template)
 

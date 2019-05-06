@@ -1,10 +1,11 @@
 import numpy as np
 from queue import PriorityQueue
+import sys
 
 
 class Buffer(object):
     # gets obs, actions, rewards, mu's, (states, masks), dones
-    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, dist_type, goal_shape, size=50000):
+    def __init__(self, env, dynamics, sample_goal_fn, reward_fn, nsteps, dist_type, goal_shape, simple_store, size=50000):
         self.nenv = env.num_envs
         self.nsteps = nsteps
         assert callable(sample_goal_fn)
@@ -25,6 +26,8 @@ class Buffer(object):
         self.nc //= self.nstack
         self.nbatch = self.nenv * self.nsteps
         self.size = size // (self.nsteps)  # Each loc contains nenv * nsteps frames, thus total buffer is nenv * size frames
+
+        self.simple_store = simple_store
 
         # Memory
         self.enc_obs = None
@@ -107,8 +110,11 @@ class Buffer(object):
 
         take = lambda x: self.take(x, idx, envx)  # for i in range(nenv)], axis = 0)
         dones = take(self.dones)
-        enc_obs = take(self.enc_obs)
-        obs = self.decode(enc_obs, dones)   # (nenv, nstep+1, nh, nw, nc)
+        if self.simple_store:
+            obs = take(self.enc_obs)
+        else:
+            enc_obs = take(self.enc_obs)
+            obs = self.decode(enc_obs, dones)   # (nenv, nstep+1, nh, nw, nc)
         actions = take(self.actions)
         ext_rewards = take(self.ext_rewards)
         mus = take(self.mus)
@@ -142,6 +148,14 @@ class Buffer(object):
         results["int_rewards"] = int_rewards
         results["goal_infos"] = goal_infos
         return results
+
+    @property
+    def memory_usage(self):
+        if self.enc_obs is None:
+            return None
+        else:
+            return sys.getsizeof(self.enc_obs) + sys.getsizeof(self.goal_obs) + sys.getsizeof(self.actions) * 5 + \
+                   sys.getsizeof(self.goal_infos) * 2
 
 
 def _stack_obs_ref(enc_obs, dones, nsteps):

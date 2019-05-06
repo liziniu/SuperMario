@@ -6,10 +6,12 @@ from copy import deepcopy
 from baselines.common.tf_util import save_variables, get_session
 import functools
 import os
+import sys
 
 
 class Acer:
-    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval, dyna_source_list, save_model):
+    def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval, dyna_source_list,
+                 save_model, simple_store):
         self.runner_expl = runner_expl
         self.runner_eval = runner_eval
         self.model_expl = model_expl
@@ -23,6 +25,7 @@ class Acer:
         self.log_cnt = 0
         self.dyna_source_list = dyna_source_list
         self.save_model = save_model
+        self.simple_store = simple_store
 
         keys = []
         keys += ["expl_return", "eval_return", "expl_length", "eval_length"]
@@ -52,7 +55,11 @@ class Acer:
         if on_policy:
             # collect data
             results = runner.run(acer_step=self.steps)
-            self.buffer.put(results["enc_obs"], results["actions"], results["ext_rewards"], results["mus"],
+            if self.simple_store:
+                enc_obs = results["obs"]
+            else:
+                enc_obs = results["enc_obs"]
+            self.buffer.put(enc_obs, results["actions"], results["ext_rewards"], results["mus"],
                             results["dones"], results["masks"], results["goal_obs"], results["goal_infos"],
                             results["obs_infos"])
             # training dynamics & put goals
@@ -92,9 +99,11 @@ class Acer:
             if self.log_cnt % self.log_interval == 0:
                 names_ops_, values_ops_ = self.model_expl.dynamics.evaluate(self.steps)
                 names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
+
+                names_ops, values_ops = names_ops + ["memory_usage(GB)"], values_ops + [self.buffer.memory_usage//(1024**3)]
                 self.log(names_ops, values_ops)
             self.log_cnt += 1
-            if self.log_cnt % 1000 == 0 and self.save_model:
+            if self.log_cnt % 2000 == 0 and self.save_model:
                 self.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(self.steps)))
 
     def initialize(self):
@@ -107,16 +116,28 @@ class Acer:
         self.episode_stats.feed(results["r"], "eval_return")
 
     @staticmethod
-    def adjust_dynamics_input_shape(results):
+    def adjust_dynamics_input_shape(results, remove_done=True):
         # flatten on-policy data (nenv, nstep, ...) for dynamics training and put_goal
-        mb_next_obs = results["obs"][:, 1:]
         mb_obs = results["obs"][:, :-1]
+        mb_next_obs = results["obs"][:, 1:]
         mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])
         mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
         mb_actions = results["actions"]
         mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
         mb_obs_infos = results["obs_infos"][:, :-1]
         mb_obs_infos = mb_obs_infos.reshape(-1)
+
+        if remove_done:
+            # remove done=True transitions since these data's next_obs is impossible to predict
+            mb_dones = results["dones"]
+            mb_dones = mb_dones.reshape((-1, ))
+            mb_select = (1 - mb_dones).astype(np.bool)
+
+            mb_obs = mb_obs[mb_select]
+            mb_next_obs = mb_next_obs[mb_select]
+            mb_actions = mb_actions[mb_select]
+            mb_obs_infos = mb_obs_infos[mb_select]
+
         return mb_obs, mb_actions, mb_next_obs, mb_obs_infos
 
     def adjust_policy_input_shape(self, results):
@@ -184,7 +205,7 @@ class Acer:
         logger.record_tabular("time_elapse(min)", int(time.time() - self.tstart) // 60)
         logger.record_tabular("nupdates", self.nupdates)
         for key in self.logger_keys:
-            if key == "goal_x" or key == "goal_y":
+            if key == "goal_x" or key == "goal_y" or "final" in key:
                 logger.record_tabular(key, self.episode_stats.get_last(key))
             else:
                 logger.record_tabular(key, self.episode_stats.get_mean(key))
