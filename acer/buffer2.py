@@ -59,13 +59,13 @@ class ReplayBuffer:
 
             index = np.random.randint(0, self.current_size)
             for key in transitions:
-                if key in ["obs", "masks", "obs_infos", "goal_infos", "goal_obs"]:
+                if key in ["obs", "masks", "goal_obs"]:
                     start, end = index*(self.nsteps+1), (index+1)*(self.nsteps+1)
                 else:
                     start, end = index*self.nsteps, (index + 1)*self.nsteps
                 transitions[key] = transitions[key][start:end]
 
-            transitions["int_rewards"] = self.reward_fn(transitions["obs_infos"], transitions["goal_infos"])[:-1]
+            transitions["int_rewards"] = self.reward_fn(transitions["obs_infos"], transitions["goal_infos"])
 
             for key in self.keys + ["int_rewards"]:
                 samples[key].append(transitions[key])

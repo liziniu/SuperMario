@@ -24,7 +24,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
           dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
-          normalize_novelty=False, save_model=False, buffer2=True, **network_kwargs):
+          normalize_novelty=False, save_model=False, buffer2=False, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)

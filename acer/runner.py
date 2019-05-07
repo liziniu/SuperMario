@@ -88,9 +88,9 @@ class Runner(AbstractEnvRunner):
         mb_dones = np.empty((self.nenv, self.nsteps), dtype=bool)
         mb_masks = np.empty((self.nenv, self.nsteps + 1), dtype=bool)
         mb_ext_rew = np.empty((self.nenv, self.nsteps), dtype=np.float32)
-        mb_obs_infos = np.empty((self.nenv, self.nsteps + 1), dtype=object)
+        mb_obs_infos = np.empty((self.nenv, self.nsteps), dtype=object)
         mb_goals = np.empty((self.nenv, self.nsteps + 1) + self.goal_shape, dtype=self.obs_dtype)
-        mb_goal_infos = np.empty((self.nenv, self.nsteps + 1), dtype=object)
+        mb_goal_infos = np.empty((self.nenv, self.nsteps), dtype=object)
 
         # mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
         # mb_obs_infos, mb_goals, mb_goal_infos = [], [], []
@@ -308,17 +308,14 @@ class Runner(AbstractEnvRunner):
                         self.reached_status[env_idx] = False
                         self.episode_reward_to_go[env_idx] = 0
 
+        # next obs and next goal
         mb_obs[:, -1] = deepcopy(self.obs)
-
-        # dummy append. Just consist with previous one.
-        mb_obs_infos[:, -1] = infos
-        mb_goals[:, -1] = mb_goals[:, -2]
-        mb_goal_infos[:, -1] = mb_goal_infos[:, -2]
+        mb_goals[:, -1] = mb_goals[:, -2]  # we cannot use self.goal since it way be revised
 
         if self.dist_type == "l2":
             raise NotImplementedError
         else:
-            mb_int_rewards = self.reward_fn(mb_obs_infos, mb_goal_infos)[:, :-1]
+            mb_int_rewards = self.reward_fn(mb_obs_infos, mb_goal_infos)
         # shapes are adjusted to [nenv, nsteps, []]
         enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
 

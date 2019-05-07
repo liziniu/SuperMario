@@ -120,7 +120,7 @@ class Acer:
         mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
         mb_actions = results["actions"]
         mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
-        mb_obs_infos = results["obs_infos"][:, :-1]
+        mb_obs_infos = results["obs_infos"]
         mb_obs_infos = mb_obs_infos.reshape(-1)
 
         if remove_done:

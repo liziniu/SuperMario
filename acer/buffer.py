@@ -120,11 +120,11 @@ class Buffer(object):
         goal_infos = take(self.goal_infos)
         obs_infos = take(self.obs_infos)
 
-        her_idx, future_idx = self.sample_goal_fn(dones, stacked=True)
+        her_idx, future_idx = self.sample_goal_fn(dones, stacked=False)
 
         goal_obs[her_idx] = goal_obs[future_idx]
         goal_infos[her_idx] = goal_infos[future_idx]
-        int_rewards = self.reward_fn(obs_infos, goal_infos)[:, :-1]
+        int_rewards = self.reward_fn(obs_infos, goal_infos)
         # episode_batch["goal_feats"] = goal_feats
         episode_batch["goal_obs"] = goal_obs
         episode_batch["int_rewards"] = int_rewards

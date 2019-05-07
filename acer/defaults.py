@@ -7,3 +7,8 @@ def atari():
         goal_shape=(84, 84, 4),  #(512, )
         normalize_novelty=True,
     )
+
+
+def get_store_keys():
+    return ["obs", "actions", "ext_rewards", "mus", "dones",
+            "masks", "goal_obs", "goal_infos",  "obs_infos"]
