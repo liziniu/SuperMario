@@ -11,7 +11,7 @@ import sys
 
 class Acer:
     def __init__(self, runner_expl, runner_eval, model_expl, model_eval, buffer, log_interval, dyna_source_list,
-                 save_model, simple_store):
+                 save_model,):
         self.runner_expl = runner_expl
         self.runner_eval = runner_eval
         self.model_expl = model_expl
@@ -25,7 +25,6 @@ class Acer:
         self.log_cnt = 0
         self.dyna_source_list = dyna_source_list
         self.save_model = save_model
-        self.simple_store = simple_store
 
         keys = []
         keys += ["expl_return", "eval_return", "expl_length", "eval_length"]
@@ -55,13 +54,7 @@ class Acer:
         if on_policy:
             # collect data
             results = runner.run(acer_step=self.steps)
-            if self.simple_store:
-                enc_obs = results["obs"]
-            else:
-                enc_obs = results["enc_obs"]
-            self.buffer.put(enc_obs, results["actions"], results["ext_rewards"], results["mus"],
-                            results["dones"], results["masks"], results["goal_obs"], results["goal_infos"],
-                            results["obs_infos"])
+            self.buffer.put(results)
             # training dynamics & put goals
             mb_obs, mb_actions, mb_next_obs, mb_obs_infos = self.adjust_dynamics_input_shape(results)
             if model_name in self.dyna_source_list:
@@ -100,7 +93,7 @@ class Acer:
                 names_ops_, values_ops_ = self.model_expl.dynamics.evaluate(self.steps)
                 names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
 
-                names_ops, values_ops = names_ops + ["memory_usage(GB)"], values_ops + [self.buffer.memory_usage//(1024**3)]
+                names_ops, values_ops = names_ops + ["memory_usage(GB)"], values_ops + [self.buffer.memory_usage]
                 self.log(names_ops, values_ops)
             self.log_cnt += 1
             if self.log_cnt % 2000 == 0 and self.save_model:

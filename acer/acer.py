@@ -22,7 +22,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
           dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
-          normalize_novelty=False, save_model=False, simple_store=True, **network_kwargs):
+          normalize_novelty=False, save_model=False, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -162,16 +162,15 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     if replay_ratio > 0:
         sample_goal_fn = make_sample_her_transitions("future", replay_k)
         assert env.num_envs == env_eval.num_envs
-        buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, dynamics=dynamics, reward_fn=reward_fn,
-                        sample_goal_fn=sample_goal_fn, dist_type=dist_type, goal_shape=model_exploration.goal_shape,
-                        simple_store=simple_store)
+        buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, reward_fn=reward_fn, sample_goal_fn=sample_goal_fn,
+                        goal_shape=model_exploration.goal_shape)
     else:
         buffer = None
     nbatch_expl = nenvs*nsteps
     nbatch_eval = nenvs_eval*nsteps
 
     acer = Acer(runner_expl, runner_eval, model_exploration, model_evaluation, buffer, log_interval, dyna_source_list,
-                save_model, simple_store)
+                save_model)
     acer.tstart = time.time()
 
     # === init to make sure we can get goal ===
