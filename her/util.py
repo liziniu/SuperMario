@@ -16,7 +16,7 @@ class Acer:
         self.buffer = buffer
         self.log_interval = log_interval
         self.tstart = None
-        self.keys = ["episode_return", "episode_length", "succ_ratio", "succ_length", "final_x_pos", "final_y_pos"]
+        self.keys = ["episode_return", "episode_length", "succ_ratio", "final_x_pos", "final_y_pos"]
         self.episode_stats = EpisodeStats(maxlen=10, keys=self.keys)
         self.steps = 0
 
@@ -69,8 +69,10 @@ class Acer:
         if length:
             self.episode_stats.feed(length, "episode_length")
         if succ:
-            self.episode_stats.feed(length, "succ_ratio")
-            self.episode_stats.feed(length, "succ_length")
+            self.episode_stats.feed(succ, "succ_ratio")
+            # self.episode_stats.feed(length, "succ_length")
+        elif succ is not None:
+            self.episode_stats.feed(succ, "succ_ratio")
         if final_pos:
             self.episode_stats.feed(final_pos["x_pos"], "final_x_pos")
             self.episode_stats.feed(final_pos["y_pos"], "final_y_pos")

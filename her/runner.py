@@ -22,7 +22,7 @@ class Runner(AbstractEnvRunner):
         self.nbatch = nenv * nsteps
         self.batch_ob_shape = (nenv*(nsteps+1),) + env.observation_space.shape
 
-        self.obs = env.reset()
+        # self.obs = env.reset()
         self.obs_dtype = env.observation_space.dtype
         self.ac_dtype = env.action_space.dtype
         self.nstack = self.env.nstack
@@ -77,7 +77,7 @@ class Runner(AbstractEnvRunner):
                     # self.goals, self.goal_infos = self.step_goal()
 
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
-                    mem = dict(env=env_idx, succ=True, length=self.episode_step[env_idx], final_pos=final_pos)
+                    mem = dict(env=env_idx, succ=False, length=self.episode_step[env_idx], final_pos=final_pos)
                     self.recoder.store(mem)
                     logger.info("env_{} fail!|goal:{}|final_pos:{}|length:{}".format(
                         env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
