@@ -100,7 +100,10 @@ class Acer:
                 self.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(self.steps)))
 
     def initialize(self):
-        init_steps = int(3e3)
+        if sys.platform == "darwin":
+            init_steps = 100
+        else:
+            init_steps = int(3e3)
         self.runner_expl.initialize(init_steps)
 
     def evaluate(self, nb_eval):

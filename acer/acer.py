@@ -14,6 +14,8 @@ import sys
 from curiosity.dynamics import DummyDynamics, Dynamics
 from baselines.common.tf_util import get_session
 import os
+from acer.buffer2 import ReplayBuffer
+from acer.defaults import get_store_keys
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
@@ -22,7 +24,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
           dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
-          normalize_novelty=False, save_model=False, **network_kwargs):
+          normalize_novelty=False, save_model=False, buffer2=True, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -162,8 +164,12 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     if replay_ratio > 0:
         sample_goal_fn = make_sample_her_transitions("future", replay_k)
         assert env.num_envs == env_eval.num_envs
-        buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, reward_fn=reward_fn, sample_goal_fn=sample_goal_fn,
-                        goal_shape=model_exploration.goal_shape)
+        if buffer2:
+            buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
+                                  keys=get_store_keys(), reward_fn=reward_fn)
+        else:
+            buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, reward_fn=reward_fn, sample_goal_fn=sample_goal_fn,
+                            goal_shape=model_exploration.goal_shape)
     else:
         buffer = None
     nbatch_expl = nenvs*nsteps
