@@ -45,7 +45,7 @@ def common_arg_parser():
     parser.add_argument('--store_data', default=False, action='store_true')
     parser.add_argument('--aux_task', help='auxiliary task type(for acer/curiosity)', type=str, choices=["RF", "RND", "IDF"])
     parser.add_argument('--gpu', type=str, default="12,13,2")
-    parser.add_argument('--mode', type=int, default=1, choices=[1, 2, 3, 4, 5])
+    parser.add_argument('--mode', type=int, default=1)
     return parser
 
 
@@ -109,6 +109,11 @@ def parse_acer_mode(mode):
         use_eval_collect = True
         use_random_policy_expl = False
         dyna_source_list = ["eval", "expl"]
+    elif mode == 6:
+        use_expl_collect = True
+        use_eval_collect = False
+        use_random_policy_expl = True
+        dyna_source_list = ["expl"]
     else:
         raise ValueError("mode:{} wrong!".format(mode))
     return use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list

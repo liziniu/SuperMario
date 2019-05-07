@@ -51,7 +51,7 @@ class Runner(AbstractEnvRunner):
 
         self.save_path = os.path.join(logger.get_dir(), "runner_data")
         self.store_data = store_data
-        self.goal_recorder = DataRecorder(self.save_path)
+        self.recorder = DataRecorder(self.save_path)
 
         self.dynamics = self.model.dynamics
         self.sample_goal = sample_goal
@@ -120,7 +120,14 @@ class Runner(AbstractEnvRunner):
             mb_masks[:, step] = deepcopy(self.dones)
 
             obs, rewards, dones, infos = self.env.step(actions)
-            check_infos(infos)
+            try:
+                check_infos(infos)
+            except ValueError:
+                logger.warn("warning!wrong infos!program continues anyway")
+                logger.info("infos:{}, dones:{}, acer_step:{}".format(infos, dones, acer_step))
+                logger.info("please debug it in runner_data/data.pkl")
+                self.recorder.store(infos)
+                self.recorder.dump()
             for info in infos:
                 info.update({"source": self.name})
 
@@ -253,6 +260,7 @@ class Runner(AbstractEnvRunner):
             for env_idx in range(self.nenv):
                 info = infos[env_idx]
                 if self.dones[env_idx]:
+                    assert info.get("episode")
                     if info.get("episode"):
                         episode_infos[env_idx]["episode"] = info.get("episode")
                     if not self.sample_goal:
@@ -266,7 +274,7 @@ class Runner(AbstractEnvRunner):
                             achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                             mem = dict(env=env_idx, is_succ=True, goal=self.goal_info[env_idx], final_pos=achieved_pos,
                                        timestep=acer_step, episode=self.episode[env_idx], step=self.episode_step[env_idx])
-                            self.goal_recorder.store(mem)
+                            self.recorder.store(mem)
                             self.log(mem)
                             abs_dist = 10
                         else:
@@ -275,7 +283,7 @@ class Runner(AbstractEnvRunner):
                             achieved_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                             mem = dict(env=env_idx, is_succ=False, goal=self.goal_info[env_idx], final_pos=achieved_pos,
                                        timestep=acer_step, episode=self.episode[env_idx], step=self.episode_step[env_idx])
-                            self.goal_recorder.store(mem)
+                            self.recorder.store(mem)
                             self.log(mem)
                             abs_dist = abs(float(infos[env_idx]["x_pos"]) - float(self.goal_info[env_idx]["x_pos"])) + \
                                        abs(float(infos[env_idx]["y_pos"]) - float(self.goal_info[env_idx]["y_pos"]))
@@ -314,7 +322,7 @@ class Runner(AbstractEnvRunner):
         # shapes are adjusted to [nenv, nsteps, []]
         enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
 
-        self.goal_recorder.dump()
+        self.recorder.dump()
         results = dict(
             enc_obs=enc_obs,
             obs=mb_obs,

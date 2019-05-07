@@ -83,7 +83,10 @@ def build_env(env_id, num_env, alg, reward_scale=1.0, env_type=None, gamestate=N
             env = make_env(env_id, env_type, prefix=prefix, seed=seed)
         else:
             frame_stack_size = 4
-            env = make_vec_env(env_id, env_type, nenv, seed, gamestate=gamestate, reward_scale=reward_scale, prefix=prefix)
+            if "SuperMarioBros" in env_id:
+                wrapper_kwargs = {"episode_life": False}
+            env = make_vec_env(env_id, env_type, nenv, seed, gamestate=gamestate, reward_scale=reward_scale,
+                               prefix=prefix, wrapper_kwargs=wrapper_kwargs)
             env = VecFrameStack(env, frame_stack_size)
 
     else:
@@ -248,7 +251,8 @@ class VecFrameStack(VecEnvWrapper):
         self.stackedobs = np.roll(self.stackedobs, shift=-1, axis=-1)
         for (i, new) in enumerate(news):
             if new:
-                self.stackedobs[..., :-obs.shape[-1]] = obs
+                # self.stackedobs = 0
+                self.stackedobs[i, ..., :-obs.shape[-1]] = obs[i]
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs, rews, news, infos
 
