@@ -98,9 +98,6 @@ class Runner(AbstractEnvRunner):
         mb_dones.append(self.dones)
         mb_goals.append(np.copy(self.goals))
 
-        # mb_obs_infos.append(infos)
-        # mb_goal_infos.append(goal_infos)
-
         enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
         mb_obs = np.asarray(mb_obs, dtype=self.obs_dtype).swapaxes(1, 0)
         mb_actions = np.asarray(mb_actions, dtype=self.ac_dtype).swapaxes(1, 0)

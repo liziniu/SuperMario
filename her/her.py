@@ -19,7 +19,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, eval_interval=300, dist_type="l1",
           save_model=False, simple_store=True, goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None,
-          **network_kwargs):
+          her=False, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -146,7 +146,17 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                     desired_x_pos=desired_x_pos)
 
     if replay_ratio > 0:
-        sample_goal_fn = make_sample_her_transitions("future", replay_k)
+        if her:
+            sample_goal_fn = make_sample_her_transitions("future", replay_k)
+        else:
+            def dummpy_sample():
+                def sample(dones, **kwargs):
+                    dummy = np.copy(dones)
+                    dummy.fill(True)
+                    index = np.where(dummy)
+                    return index, index
+                return sample
+            sample_goal_fn = dummpy_sample()
         buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, goal_shape=goal_shape, reward_fn=reward_fn,
                         sample_goal_fn=sample_goal_fn)
     else:
