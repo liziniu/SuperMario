@@ -16,7 +16,7 @@ class Acer:
         self.buffer = buffer
         self.log_interval = log_interval
         self.tstart = None
-        self.keys = ["episode_return", "episode_length", "succ_ratio", "final_x_pos", "final_y_pos", "int_rewards", "her_gain"]
+        self.keys = ["episode_return", "episode_length", "succ_ratio", "final_x_pos", "final_y_pos", "int_rewards"]
         self.episode_stats = EpisodeStats(maxlen=10, keys=self.keys)
         self.steps = 0
 
@@ -28,8 +28,7 @@ class Acer:
 
         results = runner.run()
         if buffer is not None:
-            buffer.put(results["enc_obs"], results["actions"], results["ext_rewards"], results["mus"], results["dones"],
-                       results["masks"], results["goal_obs"], results["goal_infos"], results["obs_infos"])
+            buffer.put(results)
         self.record_episode_info(results["episode_info"])
         obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_shape(results)
         names_ops, values_ops = model.train_policy(
@@ -42,7 +41,6 @@ class Acer:
                 names_ops, values_ops = model.train_policy(
                     obs, actions, int_rewards, dones, mus, model.initial_state, masks, steps, goal_obs)
                 self.episode_stats.feed(np.mean(int_rewards), "int_rewards")
-                self.episode_stats.feed(results["her_gain"], "her_gain")
 
         if int(steps/runner.nbatch) % self.log_interval == 0:
             self.log(names_ops, values_ops)

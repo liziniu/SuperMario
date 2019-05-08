@@ -12,6 +12,8 @@ from her.util import Acer, vf_dist
 import sys
 from baselines.common.tf_util import get_session
 import os
+from her.buffer2 import ReplayBuffer
+from her.defaults import get_store_keys
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
@@ -19,7 +21,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, eval_interval=300, dist_type="l1",
           save_model=False, simple_store=True, goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None,
-          her=True, **network_kwargs):
+          her=True, buffer2=True, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -142,19 +144,14 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                     desired_x_pos=desired_x_pos)
 
     if replay_ratio > 0:
-        if her:
-            sample_goal_fn = make_sample_her_transitions("future", replay_k)
+        sample_goal_fn = make_sample_her_transitions("future", replay_k)
+        assert env.num_envs == env_eval.num_envs
+        if buffer2:
+            buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
+                                  keys=get_store_keys(), reward_fn=reward_fn)
         else:
-            def dummpy_sample():
-                def sample(dones, **kwargs):
-                    dummy = np.copy(dones)
-                    dummy.fill(True)
-                    index = np.where(dummy)
-                    return index, index
-                return sample
-            sample_goal_fn = dummpy_sample()
-        buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, goal_shape=goal_shape, reward_fn=reward_fn,
-                        sample_goal_fn=sample_goal_fn)
+            buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, reward_fn=reward_fn, sample_goal_fn=sample_goal_fn,
+                            goal_shape=model.goal_shape)
     else:
         buffer = None
     acer = Acer(runner, model, buffer, log_interval,)

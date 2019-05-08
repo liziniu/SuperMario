@@ -27,7 +27,7 @@ class Buffer(object):
         self.nsteps)  # Each loc contains nenv * nsteps frames, thus total buffer is nenv * size frames
 
         # Memory
-        self.enc_obs = None
+        self.obs = None
         self.actions = None
         self.ext_rewards = None
         self.mus = None
@@ -57,29 +57,33 @@ class Buffer(object):
         return _stack_obs(enc_obs, dones,
                           nsteps=self.nsteps)
 
-    def put(self, enc_obs, actions, ext_rewards, mus, dones, masks, goals, goal_infos, obs_infos):
+    def put(self, episode_batch):
         # enc_obs [nenv, (nsteps + nstack), nh, nw, nc]
         # actions, rewards, dones [nenv, nsteps]
         # mus [nenv, nsteps, nact]
+        obs, actions, ext_rewards, mus, dones, masks, goal_obs, goal_infos, obs_infos = \
+            episode_batch["obs"], episode_batch["actions"], episode_batch["ext_rewards"], episode_batch["mus"],\
+            episode_batch["dones"], episode_batch["masks"], episode_batch["goal_obs"], episode_batch["goal_infos"],\
+            episode_batch["obs_infos"]
 
-        if self.enc_obs is None:
-            self.enc_obs = np.empty([self.size] + list(enc_obs.shape), dtype=self.obs_dtype)
+        if self.obs is None:
+            self.obs = np.empty([self.size] + list(obs.shape), dtype=self.obs_dtype)
             self.actions = np.empty([self.size] + list(actions.shape), dtype=self.ac_dtype)
             self.ext_rewards = np.empty([self.size] + list(ext_rewards.shape), dtype=np.float32)
             self.mus = np.empty([self.size] + list(mus.shape), dtype=np.float32)
             self.dones = np.empty([self.size] + list(dones.shape), dtype=np.bool)
             self.masks = np.empty([self.size] + list(masks.shape), dtype=np.bool)
-            self.goals = np.empty([self.size] + list(goals.shape), dtype=self.obs_dtype)
+            self.goals = np.empty([self.size] + list(goal_obs.shape), dtype=self.obs_dtype)
             self.goal_infos = np.empty([self.size] + list(goal_infos.shape), dtype=object)
             self.obs_infos = np.empty([self.size] + list(obs_infos.shape), dtype=object)
 
-        self.enc_obs[self.next_idx] = enc_obs
+        self.obs[self.next_idx] = obs
         self.actions[self.next_idx] = actions
         self.ext_rewards[self.next_idx] = ext_rewards
         self.mus[self.next_idx] = mus
         self.dones[self.next_idx] = dones
         self.masks[self.next_idx] = masks
-        self.goals[self.next_idx] = goals
+        self.goals[self.next_idx] = goal_obs
         self.goal_infos[self.next_idx] = goal_infos
         self.obs_infos[self.next_idx] = obs_infos
         self.next_idx = (self.next_idx + 1) % self.size
@@ -108,8 +112,7 @@ class Buffer(object):
         take = lambda x: self.take(x, idx, envx)  # for i in range(nenv)], axis = 0)
         dones = take(self.dones)
 
-        enc_obs = take(self.enc_obs)
-        obs = self.decode(enc_obs, dones)  # (nenv, nstep+1, nh, nw, nc)
+        obs = take(self.obs)  # (nenv, nstep+1, nh, nw, nc)
         actions = take(self.actions)
         ext_rewards = take(self.ext_rewards)
         mus = take(self.mus)
@@ -128,10 +131,7 @@ class Buffer(object):
         goal_infos[her_idx] = obs_infos[future_idx]
         new_dist = np.sum(vf_dist(obs_infos, goal_infos))
         her_gain = origin_dist - new_dist
-        # goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
-        # goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
         int_rewards = self.reward_fn(obs_infos, goal_infos)
-        # results["goal_feats"] = goal_feats
         results["goal_obs"] = goal_obs
         results["int_rewards"] = int_rewards
         results["goal_infos"] = goal_infos
@@ -140,10 +140,10 @@ class Buffer(object):
 
     @property
     def memory_usage(self):
-        if self.enc_obs is None:
+        if self.obs is None:
             return None
         else:
-            return sys.getsizeof(self.enc_obs) + sys.getsizeof(self.goals) + sys.getsizeof(self.actions) * 5 + \
+            return sys.getsizeof(self.obs) + sys.getsizeof(self.goals) + sys.getsizeof(self.actions) * 5 + \
                    sys.getsizeof(self.goal_infos) * 2
 
 

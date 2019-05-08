@@ -6,3 +6,8 @@ def atari():
         nb_train_epoch=8,
         desired_x_pos=500,
     )
+
+
+def get_store_keys():
+    return ["obs", "actions", "ext_rewards", "mus", "dones",
+            "masks", "goal_obs", "goal_infos",  "obs_infos"]
