@@ -180,6 +180,7 @@ def main(args):
     extra_args = parse_cmdline_kwargs(unknown_args)
 
     import os
+    import shutil
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     path = osp.join("logs", datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S-%f".format(args.env)))
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
@@ -189,6 +190,9 @@ def main(args):
         logger.configure(format_strs=[])
         rank = MPI.COMM_WORLD.Get_rank()
 
+    shutil.copytree(os.path.join(os.getcwd(), args.alg), os.path.join(path, "code", args.alg))
+    shutil.copytree(os.path.join(os.getcwd(), "common"), os.path.join(path, "code", "common"))
+    shutil.copytree(os.path.join(os.getcwd(), "curiosity"), os.path.join(path, "code", "curiosity"))
     logger.info("cmd args:{}".format(args.__dict__))
     model, env = train(args, extra_args)
 
