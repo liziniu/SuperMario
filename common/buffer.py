@@ -13,6 +13,7 @@ class ReplayBuffer:
             sample_transitions (function): a function that samples from the replay buffer
         """
         nenv = self.nenv = env.num_envs
+        size = 100
         self.size = size // nenv
         self.nsteps = nsteps
         self.sample_goal_fn = sample_goal_fn
@@ -28,7 +29,7 @@ class ReplayBuffer:
 
         # memory management
         self.lock = threading.Lock()
-        self.current_size = 0
+        self.current_size = 0   # num of sub-trajectories rather than transitions
 
     def get(self, use_cache, downsample=True):
         """Returns a dict {key: array(batch_size x shapes[key])}
@@ -95,12 +96,15 @@ class ReplayBuffer:
                     self.buffers[i][key] = np.empty((maxlen, ) + x.shape[1:], dtype=x.dtype)
                 if key in ["obs", "masks", "goal_obs"]:
                     start, end = self.current_size*(self.nsteps+1), (self.current_size+1)*(self.nsteps+1)
-                    self.buffers[i][key][start:end] = x
+                    try:
+                        self.buffers[i][key][start:end] = x
+                    except Exception as e:
+                        print(e)
                 else:
                     start, end = self.current_size*self.nsteps, (self.current_size+1)*self.nsteps
                     self.buffers[i][key][start:end] = x
         self.current_size += 1
-        self.current_size = self.current_size % self.size
+        self.current_size %= self.size // self.nsteps
 
     @property
     def memory_usage(self):
