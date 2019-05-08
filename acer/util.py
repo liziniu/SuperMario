@@ -43,7 +43,7 @@ class Acer:
         params = self.model_expl.params + self.model_eval.params + self.model_expl.params
         self.save = functools.partial(save_variables, sess=self.model_expl.sess, variables=params)
 
-    def call(self, on_policy, model_name=None, update_list=None):
+    def call(self, on_policy, model_name=None, update_list=None, use_cache=None):
         names_ops, values_ops = [], []
         dyna_trained, eval_trained, expl_trained = False, False, False
         if model_name == "expl":
@@ -68,7 +68,7 @@ class Acer:
             # store useful episode information
             self.record_episode_info(results["episode_infos"], model_name)
         else:
-            results = self.buffer.get()
+            results = self.buffer.get(use_cache=use_cache)
         obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
 
         if not on_policy:

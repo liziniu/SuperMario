@@ -36,7 +36,10 @@ class Acer:
 
         if buffer.has_atleast(replay_start):
             for i in range(nb_train_epoch):
-                results = buffer.get()
+                if i == 0:
+                    results = buffer.get(use_cache=False)
+                else:
+                    results = buffer.get(use_cache=True)
                 obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_shape(results)
                 names_ops, values_ops = model.train_policy(
                     obs, actions, int_rewards, dones, mus, model.initial_state, masks, steps, goal_obs)

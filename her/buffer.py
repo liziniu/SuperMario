@@ -97,7 +97,7 @@ class Buffer(object):
         return out
 
     # todo: add her
-    def get(self):
+    def get(self, **kwargs):
         # returns
         # obs [nenv, (nsteps + 1), nh, nw, nstack*nc]
         # actions, rewards, dones [nenv, nsteps]

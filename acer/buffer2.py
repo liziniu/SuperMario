@@ -25,36 +25,43 @@ class ReplayBuffer:
         self.keys = keys
         # self._trajectory_buffer = Trajectory(nenv, keys)
         self.buffers = [{key: deque(maxlen=self.size) for key in keys} for _ in range(nenv)]
+        self._cache = [{} for _ in range(self.nenv)]
 
         # memory management
         self.lock = threading.Lock()
 
-    def get(self,):
+    def get(self, use_cache):
         """Returns a dict {key: array(batch_size x shapes[key])}
         """
         samples = {key: [] for key in self.keys + ["int_rewards"]}
-        for i in range(self.nenv):
-            dones = self.buffers[i]["dones"].copy()   # (1, self.current_size)
-            dones = np.concatenate(dones, axis=0)
+        if not use_cache:
+            for i in range(self.nenv):
+                buffer_copy = self.buffers[i].copy()
+                for key in self.keys:
+                    arr = np.concatenate(buffer_copy[key], axis=0)
+                    if key in ["obs", "goal_obs", "next_obs"]:
+                        arr.astype(self.obs_dtype)
+                    elif key in ["mus", "dones", "masks"]:
+                        arr.astype(np.bool)
+                    elif key in ["actions"]:
+                        arr.astype(self.ac_dtype)
+                    elif key in ["goal_infos", "obs_infos"]:
+                        arr.astype(object)
+                    elif key in ["ext_rewards"]:
+                        arr.astype(np.float32)
+                    else:
+                        raise ValueError("Unknown key:{}".format(key))
+                    self._cache[i][key] = arr
+                self._cache[i]["obs_decoded"] = decode_obs(self._cache[i]["obs"], self.nsteps)
+            cache = self._cache.copy()
+        else:
+            cache = self._cache.copy()
 
-            transitions = self.buffers[i].copy()
-            for key in self.keys:
-                arr = np.concatenate(transitions[key], axis=0)
-                if key in ["obs", "goal_obs", "next_obs"]:
-                    arr.astype(self.obs_dtype)
-                elif key in ["mus", "dones", "masks"]:
-                    arr.astype(np.bool)
-                elif key in ["actions"]:
-                    arr.astype(self.ac_dtype)
-                elif key in ["goal_infos", "obs_infos"]:
-                    arr.astype(object)
-                elif key in ["ext_rewards"]:
-                    arr.astype(np.float32)
-                else:
-                    raise ValueError("Unknown key:{}".format(key))
-                transitions[key] = arr
+        for i in range(self.nenv):
+            transitions = cache[i].copy()
+            dones = transitions["dones"]
             her_index, future_index = self.sample_goal_fn(dones, stacked=False)
-            transitions["goal_obs"][her_index] = decode_obs(transitions["obs"], self.nsteps)[future_index]
+            transitions["goal_obs"][her_index] = transitions["obs_decoded"][future_index]
             transitions["goal_infos"][her_index] = transitions["obs_infos"][future_index]
 
             index = np.random.randint(0, self.current_size)
@@ -64,9 +71,10 @@ class ReplayBuffer:
                 else:
                     start, end = index*self.nsteps, (index + 1)*self.nsteps
                 transitions[key] = transitions[key][start:end]
-
-            transitions["int_rewards"] = self.reward_fn(transitions["obs_infos"], transitions["goal_infos"])
-
+            try:
+                transitions["int_rewards"] = self.reward_fn(transitions["obs_infos"], transitions["goal_infos"])
+            except Exception as e:
+                print(e)
             for key in self.keys + ["int_rewards"]:
                 samples[key].append(transitions[key])
         for key in self.keys + ["int_rewards"]:

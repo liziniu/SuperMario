@@ -194,7 +194,10 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             for i in range(n):
                 if buffer.has_atleast(replay_start):
                     if i < n//2:
-                        acer.call(on_policy=False, update_list=["expl", "eval"])
+                        if i == 0:
+                            acer.call(on_policy=False, update_list=["expl", "eval"], use_cache=False)
+                        else:
+                            acer.call(on_policy=False, update_list=["expl", "eval"], use_cache=True)
                     else:
                         pass
                         # acer.call(on_policy=False, update_list=["expl"])
