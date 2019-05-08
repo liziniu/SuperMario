@@ -86,6 +86,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     '''
     if sys.platform == "darwin":
         log_interval = 5
+        replay_start = 10
 
     logger.info("Running Acer with following kwargs")
     logger.info(locals())

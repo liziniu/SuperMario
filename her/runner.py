@@ -111,7 +111,7 @@ class Runner(AbstractEnvRunner):
 
         mb_obs_infos = np.asarray(mb_obs_infos, dtype=object).swapaxes(1, 0)
         mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
-        # mb_int_rewards = self.reward_fn(mb_obs_infos, mb_goal_infos)
+        mb_int_rewards = self.reward_fn(mb_obs_infos, mb_goal_infos)
         # shapes are now [nenv, nsteps, []]
         # When pulling from buffer, arrays will now be reshaped in place, preventing a deep copy.
 
@@ -120,11 +120,11 @@ class Runner(AbstractEnvRunner):
             obs=mb_obs,
             actions=mb_actions,
             ext_rewards=mb_rewards,
-            # int_rewards=mb_int_rewards,
+            int_rewards=mb_int_rewards,
             mus=mb_mus,
             dones=mb_dones,
             masks=mb_masks,
-            goals=mb_goals,
+            goal_obs=mb_goals,
             obs_infos=mb_obs_infos,
             goal_infos=mb_goal_infos,
             episode_info=episode_info,
