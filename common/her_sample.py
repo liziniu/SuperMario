@@ -37,13 +37,14 @@ def make_sample_her_transitions(replay_strategy, replay_k):
         her_indexes = np.where(np.random.uniform(size=[nenv, T]) < future_p)
         nb_her_sample = len(her_indexes[1])
         offset_indexes = np.random.uniform(size=nb_her_sample) * (T - her_indexes[1])
-        max_future_indexes = np.array([np.arange(T) for _ in range(nenv)])
+        max_future_indexes = np.empty_like(dones, dtype=np.int32)
+        max_future_indexes.fill(T-1)
         for i in range(nenv):
             done_index = np.where(dones[i])[0]
             start = 0
             for idx in done_index:
                 end = idx
-                max_future_indexes[i][start:end] = max_future_indexes[i][end]
+                max_future_indexes[i][start:end] = idx
                 start = idx
         max_future_indexes = max_future_indexes[her_indexes]  # downsample
         future_indexes = np.maximum(1, offset_indexes.astype(int)) + her_indexes[1]
