@@ -16,7 +16,7 @@ class Acer:
         self.buffer = buffer
         self.log_interval = log_interval
         self.tstart = None
-        self.keys = ["episode_return", "episode_length", "succ_ratio", "final_x_pos", "final_y_pos", "int_rewards"]
+        self.keys = ["episode_return", "episode_length", "succ_ratio", "final_x_pos", "final_y_pos", "int_rewards", "her_gain"]
         self.episode_stats = EpisodeStats(maxlen=10, keys=self.keys)
         self.steps = 0
 
@@ -42,6 +42,7 @@ class Acer:
                 names_ops, values_ops = model.train_policy(
                     obs, actions, int_rewards, dones, mus, model.initial_state, masks, steps, goal_obs)
                 self.episode_stats.feed(np.mean(int_rewards), "int_rewards")
+                self.episode_stats.feed(results["her_gain"], "her_gain")
 
         if int(steps/runner.nbatch) % self.log_interval == 0:
             self.log(names_ops, values_ops)
@@ -88,3 +89,11 @@ class Acer:
         for key in self.keys:
             logger.record_tabular(key, self.episode_stats.get_mean(key))
         logger.dump_tabular()
+
+
+def f_dist(current_pos, goal_pos):
+    dist = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"])) + \
+           abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
+    return dist
+
+vf_dist = np.vectorize(f_dist)

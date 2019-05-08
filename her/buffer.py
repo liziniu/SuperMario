@@ -1,6 +1,7 @@
 import numpy as np
 from queue import PriorityQueue
 import sys
+from her.util import vf_dist
 
 
 class Buffer(object):
@@ -122,8 +123,11 @@ class Buffer(object):
 
         her_idx, future_idx = self.sample_goal_fn(dones, stacked=False)
 
-        goal_obs[her_idx] = goal_obs[future_idx]
-        goal_infos[her_idx] = goal_infos[future_idx]
+        origin_dist = np.sum(vf_dist(obs_infos, goal_infos))
+        goal_obs[her_idx] = obs[:, :-1][future_idx]
+        goal_infos[her_idx] = obs_infos[future_idx]
+        new_dist = np.sum(vf_dist(obs_infos, goal_infos))
+        her_gain = origin_dist - new_dist
         # goal_obs_flatten = np.copy(goal_obs).reshape((-1, ) + goal_obs.shape[2:])
         # goal_feats = self.dynamics.extract_feature(goal_obs_flatten)
         int_rewards = self.reward_fn(obs_infos, goal_infos)
@@ -131,6 +135,7 @@ class Buffer(object):
         results["goal_obs"] = goal_obs
         results["int_rewards"] = int_rewards
         results["goal_infos"] = goal_infos
+        results["her_gain"] = her_gain
         return results
 
     @property
