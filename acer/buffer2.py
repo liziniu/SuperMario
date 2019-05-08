@@ -54,8 +54,8 @@ class ReplayBuffer:
                     raise ValueError("Unknown key:{}".format(key))
                 transitions[key] = arr
             her_index, future_index = self.sample_goal_fn(dones, stacked=False)
-            transitions["goal_obs"][her_index] = transitions["goal_obs"][future_index]
-            transitions["goal_infos"][her_index] = transitions["goal_infos"][future_index]
+            transitions["goal_obs"][her_index] = decode_obs(transitions["obs"], self.nsteps)[future_index]
+            transitions["goal_infos"][her_index] = transitions["obs_infos"][future_index]
 
             index = np.random.randint(0, self.current_size)
             for key in transitions:
@@ -102,3 +102,24 @@ class ReplayBuffer:
         # Frames per env, so total (nenv * frames) Frames needed
         # Each buffer loc has nenv * nsteps frames
         return self.current_size * self.nsteps * self.nenv >= frames
+
+
+def decode_obs(enc_obs, nsteps):
+    assert len(enc_obs) % (nsteps+1) == 0
+    nb_segment = len(enc_obs) // (nsteps + 1)
+    segments = np.split(enc_obs, nb_segment)
+    new_arr = []
+    for sub_arr in segments:
+        new_arr.append(sub_arr[:-1])
+    new_arr = np.concatenate(new_arr, axis=0)
+    return new_arr
+
+if __name__ == "__main__":
+    nsteps = 10
+    enc_obs = []
+    for j in range(2):
+        for i in range(nsteps+1):
+            enc_obs.append(j*10 + i)
+    enc_obs = np.array(enc_obs)
+    obs = decode_obs(enc_obs, nsteps)
+    print(obs)

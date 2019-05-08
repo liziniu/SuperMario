@@ -8,7 +8,7 @@ from acer.buffer import Buffer
 from acer.runner import Runner
 from common.her_sample import make_sample_her_transitions
 from acer.model import Model
-from acer.util import Acer
+from acer.util import Acer, vf_dist
 from common.env_util import parser_env_id, build_env, get_env_type
 import sys
 from curiosity.dynamics import DummyDynamics, Dynamics
@@ -24,7 +24,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
           dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
-          normalize_novelty=False, save_model=False, buffer2=False, **network_kwargs):
+          normalize_novelty=False, save_model=False, buffer2=True, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -136,17 +136,12 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         coeff = 0.03
         threshold = 20
 
-        def f(current_pos, goal_pos):
-            dist = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"])) +\
-                    abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
-            if sparse:
-                rew = float(dist < threshold)
-            else:
-                rew = np.exp(-coeff * dist)
-            return rew
-        vf = np.vectorize(f)
-        mb_int_rewards = vf(current_pos_infos, goal_pos_infos)
-        return mb_int_rewards
+        dist = vf_dist(current_pos_infos, goal_pos_infos)
+        if sparse:
+            rewards = (dist < threshold).astype(float)
+        else:
+            rewards = np.exp(-coeff * dist)
+        return rewards
 
     assert dist_type in ["l1", "l2"]
     if dist_type == "l2":

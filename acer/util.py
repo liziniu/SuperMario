@@ -71,8 +71,9 @@ class Acer:
             results = self.buffer.get()
         obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
 
-        self.episode_stats.feed(np.mean(int_rewards), "int_rew_mean")
-        self.episode_stats.feed(np.std(int_rewards), "int_rew_std")
+        if not on_policy:
+            self.episode_stats.feed(np.mean(int_rewards), "int_rew_mean")
+            self.episode_stats.feed(np.std(int_rewards), "int_rew_std")
         # Training Policy
         assert self.model_expl.scope != self.model_eval.scope
         if "eval" in update_list:
@@ -209,3 +210,11 @@ class Acer:
         for name, val in zip(names_ops, values_ops):
             logger.record_tabular(name, float(val))
         logger.dump_tabular()
+
+
+def f_dist(current_pos, goal_pos):
+    dist = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"])) + \
+           abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
+    return dist
+
+vf_dist = np.vectorize(f_dist)
