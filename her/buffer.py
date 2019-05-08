@@ -124,7 +124,7 @@ class Buffer(object):
         goal_infos = take(self.goal_infos)
         obs_infos = take(self.obs_infos)
 
-        her_idx, future_idx = self.sample_goal_fn(dones, stacked=False)
+        her_idx, future_idx = self.sample_goal_fn(dones)
 
         origin_dist = np.sum(vf_dist(obs_infos, goal_infos))
         goal_obs[her_idx] = obs[:, :-1][future_idx]

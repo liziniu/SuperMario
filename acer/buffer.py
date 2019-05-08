@@ -120,7 +120,7 @@ class Buffer(object):
         goal_infos = take(self.goal_infos)
         obs_infos = take(self.obs_infos)
 
-        her_idx, future_idx = self.sample_goal_fn(dones, stacked=False)
+        her_idx, future_idx = self.sample_goal_fn(dones)
 
         goal_obs[her_idx] = goal_obs[future_idx]
         goal_infos[her_idx] = goal_infos[future_idx]

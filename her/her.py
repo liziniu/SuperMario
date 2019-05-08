@@ -12,7 +12,7 @@ from her.util import Acer, vf_dist
 import sys
 from baselines.common.tf_util import get_session
 import os
-from her.buffer2 import ReplayBuffer
+from common.buffer import ReplayBuffer
 from her.defaults import get_store_keys
 
 

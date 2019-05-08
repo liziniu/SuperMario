@@ -14,7 +14,7 @@ import sys
 from curiosity.dynamics import DummyDynamics, Dynamics
 from baselines.common.tf_util import get_session
 import os
-from acer.buffer2 import ReplayBuffer
+from common.buffer import ReplayBuffer
 from acer.defaults import get_store_keys
 
 

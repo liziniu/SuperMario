@@ -17,6 +17,7 @@ class Acer:
         self.log_interval = log_interval
         self.tstart = None
         self.keys = ["episode_return", "episode_length", "succ_ratio", "final_x_pos", "final_y_pos", "int_rewards"]
+        self.keys += ["put_time", "get_first", "get_second"]
         self.episode_stats = EpisodeStats(maxlen=10, keys=self.keys)
         self.steps = 0
 
@@ -28,7 +29,9 @@ class Acer:
 
         results = runner.run()
         if buffer is not None:
+            tstart = time.time()
             buffer.put(results)
+            self.episode_stats.feed(time.time()-tstart, "put_time")
         self.record_episode_info(results["episode_info"])
         obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_shape(results)
         names_ops, values_ops = model.train_policy(
@@ -37,15 +40,20 @@ class Acer:
         if buffer.has_atleast(replay_start):
             for i in range(nb_train_epoch):
                 if i == 0:
+                    tstart = time.time()
                     results = buffer.get(use_cache=False)
+                    self.episode_stats.feed(time.time()-tstart, "get_first")
                 else:
+                    tstart = time.time()
                     results = buffer.get(use_cache=True)
+                    self.episode_stats.feed(time.time()-tstart, "get_second")
                 obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_shape(results)
                 names_ops, values_ops = model.train_policy(
                     obs, actions, int_rewards, dones, mus, model.initial_state, masks, steps, goal_obs)
                 self.episode_stats.feed(np.mean(int_rewards), "int_rewards")
 
         if int(steps/runner.nbatch) % self.log_interval == 0:
+            names_ops, values_ops = names_ops + ["memory_usage(GB)"], values_ops + [self.buffer.memory_usage]
             self.log(names_ops, values_ops)
 
             if int(steps/runner.nbatch) % (self.log_interval * 200) == 0:

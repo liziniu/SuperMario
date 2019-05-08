@@ -17,7 +17,7 @@ def make_sample_her_transitions(replay_strategy, replay_k):
     else:  # 'replay_strategy' == 'none'
         future_p = 0
 
-    def _sample_her_transitions(dones, stacked=False):
+    def _sample_her_transitions(dones, max_length=None):
         """
         dones: (nenv, nstep)
         """
@@ -27,20 +27,19 @@ def make_sample_her_transitions(replay_strategy, replay_k):
         else:
             flatten = False
         nenv = dones.shape[0]
-        if stacked:
-            T = dones.shape[1] + 1
-        else:
+        if max_length is None:
             T = dones.shape[1]
-
+        else:
+            T = max_length
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
         her_indexes = np.where(np.random.uniform(size=[nenv, T]) < future_p)
         nb_her_sample = len(her_indexes[1])
         offset_indexes = np.random.uniform(size=nb_her_sample) * (T - her_indexes[1])
-        max_future_indexes = np.empty_like(dones, dtype=np.int32)
+        max_future_indexes = np.empty(shape=[nenv, T], dtype=np.int32)
         max_future_indexes.fill(T-1)
         for i in range(nenv):
-            done_index = np.where(dones[i])[0]
+            done_index = np.where(dones[i][:T])[0]
             start = 0
             for idx in done_index:
                 end = idx
