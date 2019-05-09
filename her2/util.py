@@ -7,6 +7,7 @@ from baselines.common.tf_util import save_variables
 import functools
 import os
 import sys
+from common.util import DataRecorder
 
 
 class Acer:
@@ -20,6 +21,8 @@ class Acer:
         self.keys += ["put_time", "get_first", "get_second"]
         self.episode_stats = EpisodeStats(maxlen=10, keys=self.keys)
         self.steps = 0
+        self.save_interval = self.runner.save_interval
+        self.recoder = DataRecorder(os.path.join(logger.get_dir(), "samples"))
 
         sess = self.model.sess
         self.save = functools.partial(save_variables, sess=sess, variables=self.model.params)
@@ -58,6 +61,11 @@ class Acer:
 
             if int(steps/runner.nbatch) % (self.log_interval * 200) == 0:
                 self.save(os.path.join(logger.get_dir(), "{}.pkl".format(self.steps)))
+
+        if self.save_interval > 0 and int(steps / runner.nbatch) % self.save_interval == 0:
+            results["acer_steps"] = self.steps
+            self.recoder.store(results)
+            self.recoder.dump()
 
     def adjust_shape(self, results):
         runner = self.runner

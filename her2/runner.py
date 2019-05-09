@@ -8,11 +8,12 @@ from queue import PriorityQueue
 from common.util import DataRecorder
 import os
 from copy import deepcopy
+from her2.defaults import THRESHOLD
 
 
 class Runner(AbstractEnvRunner):
 
-    def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos):
+    def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos, save_interval):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space, spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
         assert isinstance(env, VecFrameStack)
@@ -30,6 +31,7 @@ class Runner(AbstractEnvRunner):
         self.nc = self.batch_ob_shape[-1] // self.nstack
         
         self.recoder = DataRecorder(os.path.join(logger.get_dir(), "runner_data"))
+        self.save_interval = save_interval
 
         self.desired_x_pos = desired_x_pos
         self.load_path = load_path
@@ -38,6 +40,7 @@ class Runner(AbstractEnvRunner):
         self.initialize()
         self.goals, self.goal_infos = self.get_goal(self.nenv)
         self.episode_step = np.zeros(self.nenv, dtype=np.int32)
+        self.episode = np.zeros(self.nenv, dtype=np.int32)
 
         self.reward_fn = reward_fn
 
@@ -57,29 +60,27 @@ class Runner(AbstractEnvRunner):
             mb_goal_infos.append(np.copy(self.goal_infos))
             obs, rewards, dones, infos = self.env.step(actions)
             self.episode_step += 1
+            if self.save_interval > 0 and self.episode[0] % self.save_interval == 0:
+                self.recoder.store({"obs": np.copy(self.obs[0]), "act": actions[0], "next_obs": obs[0],
+                                    "reward": rewards[0], "info": infos[0], "goal": self.goals[0],
+                                    "goal_info": self.goal_infos[0]})
             for env_idx in range(self.nenv):
                 reached = self.check_goal_reached_v2(infos[env_idx], self.goal_infos[env_idx])
                 if reached:
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
-                    mem = dict(env=env_idx, succ=True, length=self.episode_step[env_idx], final_pos=final_pos)
-                    self.recoder.store(mem)
                     logger.info("env_{} succ!|goal:{}|final_pos:{}|length:{}".format(
                         env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
                     episode_info["succ"] = True
                     episode_info["length"] = self.episode_step[env_idx]
                     episode_info["final_pos"] = final_pos
                     self.episode_step[env_idx] = 0
+                    self.episode[env_idx] += 1
 
                     assert self.nenv == 1
                     dones[:] = True
                     obs = self.env.reset()
-                    # self.goals, self.goal_infos = self.step_goal()
                 elif dones[env_idx]:
-                    # self.goals, self.goal_infos = self.step_goal()
-
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
-                    mem = dict(env=env_idx, succ=False, length=self.episode_step[env_idx], final_pos=final_pos)
-                    self.recoder.store(mem)
                     logger.info("env_{} fail!|goal:{}|final_pos:{}|length:{}".format(
                         env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
                     episode_info["succ"] = False
@@ -88,6 +89,7 @@ class Runner(AbstractEnvRunner):
                     if infos[env_idx].get("episode"):
                         episode_info["episode"] = infos[env_idx].get("episode")
                     self.episode_step[env_idx] = 0
+                    self.episode[env_idx] += 1
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
@@ -170,7 +172,7 @@ class Runner(AbstractEnvRunner):
 
     @staticmethod
     def check_goal_reached_v2(obs_info, goal_info):
-        eps = 20
+        eps = THRESHOLD
         obs_x, obs_y = float(obs_info["x_pos"]), float(obs_info["y_pos"])
         goal_x, goal_y = float(goal_info["x_pos"]), float(goal_info["y_pos"])
         dist = abs(obs_x - goal_x) + abs(obs_y - goal_y)
