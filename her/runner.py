@@ -8,6 +8,7 @@ from queue import PriorityQueue
 from common.util import DataRecorder
 import os
 from copy import deepcopy
+from her.defaults import THRESHOLD
 
 
 class Runner(AbstractEnvRunner):
@@ -170,7 +171,7 @@ class Runner(AbstractEnvRunner):
 
     @staticmethod
     def check_goal_reached_v2(obs_info, goal_info):
-        eps = 20
+        eps = THRESHOLD
         obs_x, obs_y = float(obs_info["x_pos"]), float(obs_info["y_pos"])
         goal_x, goal_y = float(goal_info["x_pos"]), float(goal_info["y_pos"])
         dist = abs(obs_x - goal_x) + abs(obs_y - goal_y)

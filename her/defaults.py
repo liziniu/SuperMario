@@ -1,3 +1,8 @@
+
+
+THRESHOLD = 6
+
+
 def atari():
     return dict(
         lrschedule='constant',

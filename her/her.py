@@ -13,7 +13,7 @@ import sys
 from baselines.common.tf_util import get_session
 import os
 from common.buffer import ReplayBuffer
-from her.defaults import get_store_keys
+from her.defaults import get_store_keys, THRESHOLD
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
@@ -124,7 +124,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     def reward_fn_v2(current_pos_infos, goal_pos_infos, sparse=True):
         assert current_pos_infos.shape == goal_pos_infos.shape
         coeff = 0.03
-        threshold = 20
+        threshold = THRESHOLD
 
         dist = vf_dist(current_pos_infos, goal_pos_infos)
         if sparse:
@@ -144,7 +144,17 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                     desired_x_pos=desired_x_pos)
 
     if replay_ratio > 0:
-        sample_goal_fn = make_sample_her_transitions("future", replay_k)
+        if her:
+            sample_goal_fn = make_sample_her_transitions("future", replay_k)
+        else:
+            def dummpy_sample():
+                def sample(dones, **kwargs):
+                    dummy = np.copy(dones)
+                    dummy.fill(False)
+                    index = np.where(dummy)
+                    return index, index
+                return sample
+            sample_goal_fn = dummpy_sample()
         assert env.num_envs == env_eval.num_envs
         if buffer2:
             buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
