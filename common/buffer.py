@@ -47,15 +47,15 @@ class ReplayBuffer:
                 else:
                     start, end = 0, self.current_size
                 for key in self.keys:
-                    if key in ["obs", "masks", "goal_obs"]:
+                    if key in ["obs", "masks"]:
                         cache[i][key] = self.buffers[i][key][start*(self.nsteps+1):end*(self.nsteps+1)].copy()
                     else:
                         cache[i][key] = self.buffers[i][key][start*self.nsteps:end*self.nsteps].copy()
             for i in range(self.nenv):
                 dones = cache[i]["dones"]
                 her_index, future_index = self.sample_goal_fn(dones)
-                obs_decoded = decode_obs(cache[i]["obs"], self.nsteps)
-                cache[i]["goal_obs"][her_index] = obs_decoded[future_index]
+                next_obs_decoded = decode_obs(cache[i]["obs"], self.nsteps)
+                cache[i]["goal_obs"][her_index] = next_obs_decoded[future_index]
                 cache[i]["goal_infos"][her_index] = cache[i]["obs_infos"][future_index]
             self._cache = cache.copy()
         else:
@@ -65,7 +65,7 @@ class ReplayBuffer:
             real_size = len(transitions["obs"]) // (self.nsteps + 1)
             index = np.random.randint(0, real_size)
             for key in self.keys:
-                if key in ["obs", "masks", "goal_obs"]:
+                if key in ["obs", "masks"]:
                     start, end = index*(self.nsteps+1), (index+1)*(self.nsteps+1)
                 else:
                     start, end = index*self.nsteps, (index+1)*self.nsteps
@@ -73,7 +73,7 @@ class ReplayBuffer:
             int_rewards = self.reward_fn(samples["obs_infos"][i], samples["goal_infos"][i])
             samples["int_rewards"].append(int_rewards)
         for key in self.keys + ["int_rewards"]:
-            samples[key] = np.concatenate(samples[key], axis=0)
+            samples[key] = np.asarray(samples[key])
         return samples
 
     def put(self, episode_batch):
@@ -88,12 +88,12 @@ class ReplayBuffer:
             for key in self.keys:
                 x = episode_batch[key][i]
                 if self.buffers[i][key] is None:
-                    if key in ["obs", "masks", "goal_obs"]:
+                    if key in ["obs", "masks"]:
                         maxlen = self.size // self.nsteps * (self.nsteps + 1)
                     else:
                         maxlen = self.size // self.nsteps * self.nsteps
                     self.buffers[i][key] = np.empty((maxlen, ) + x.shape[1:], dtype=x.dtype)
-                if key in ["obs", "masks", "goal_obs"]:
+                if key in ["obs", "masks"]:
                     start, end = self.current_size*(self.nsteps+1), (self.current_size+1)*(self.nsteps+1)
                     try:
                         self.buffers[i][key][start:end] = x
@@ -124,7 +124,7 @@ def decode_obs(enc_obs, nsteps):
     segments = np.split(enc_obs, nb_segment)
     new_arr = []
     for sub_arr in segments:
-        new_arr.append(sub_arr[:-1])
+        new_arr.append(sub_arr[1:])
     new_arr = np.concatenate(new_arr, axis=0)
     return new_arr
 

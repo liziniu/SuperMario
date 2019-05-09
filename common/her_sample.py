@@ -43,13 +43,16 @@ def make_sample_her_transitions(replay_strategy, replay_k):
             start = 0
             for idx in done_index:
                 end = idx
-                max_future_indexes[i][start:end] = idx
+                max_future_indexes[i][start:end] = idx - 1  # we cannot choose done's next_state
                 start = idx
         max_future_indexes = max_future_indexes[her_indexes]  # downsample
-        future_indexes = np.maximum(1, offset_indexes.astype(int)) + her_indexes[1]
+        future_indexes = offset_indexes.astype(int) + her_indexes[1]
         future_indexes = np.minimum(future_indexes, max_future_indexes)
         future_indexes = (her_indexes[0], future_indexes)
 
+        # !!! IMPORTANT !!!
+        # her_indexes and future_indexes should be applied on obs_next rather than obs.
+        # same with goal_info, which meaning that goal_info describes obs_next.
         assert all(her_indexes[1] <= future_indexes[1])
         if flatten:
             return her_indexes[1], future_indexes[1]
@@ -64,20 +67,20 @@ def test_her_sample():
     import matplotlib.pyplot as plt
     np.random.seed(3)
     nenv, nsteps, ndim = 2, 10, 1
-    sample_fn = make_sample_her_transitions("future", 4)
-    goal_obs = np.random.randint(0, 100, [ nsteps, 1], dtype=int)
+    sample_fn = make_sample_her_transitions("future", 0.5)
+    goal_obs = np.random.randint(0, 100, [nenv, nsteps], dtype=int)
     # goal_obs = np.random.randint(0, 100, [nenv, nsteps, 1], dtype=int)
 
     _goal_obs = np.copy(goal_obs)[..., :-1]
     _next_goal_obs = np.copy(goal_obs)[..., 1:]
     assert np.sum(_next_goal_obs[..., :-1] - _goal_obs[..., 1:]) < 1e-6
 
-    dones = np.empty([nsteps], dtype=bool)
     # dones = np.empty([nenv, nsteps], dtype=bool)
+    dones = np.empty([nenv, nsteps], dtype=bool)
     dones.fill(False)
     batch_size = 2
-    # dones_idx = [np.random.randint(0, nenv, batch_size), np.random.randint(0, nsteps, batch_size)]
-    dones_idx = np.random.randint(0, nsteps, batch_size)
+    dones_idx = [np.random.randint(0, nenv, batch_size), np.random.randint(0, nsteps, batch_size)]
+    # dones_idx = np.random.randint(0, nsteps, batch_size)
     dones[dones_idx] = True
     print(dones)
     print("----------------index----------------------")
@@ -88,8 +91,8 @@ def test_her_sample():
     for obs in goal_obs.flatten():
         print(obs, end=",\t")
     print()
-    plt.plot(goal_obs.flatten(), label="origin")
-    her_index, future_idx = sample_fn(dones, stacked=False)
+    # plt.plot(goal_obs.flatten(), label="origin")
+    her_index, future_idx = sample_fn(dones)
     goal_obs[her_index] = goal_obs[future_idx]
     print("----------------her_obs----------------------")
     for obs in goal_obs.flatten():
