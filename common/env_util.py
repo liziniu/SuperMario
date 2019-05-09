@@ -252,12 +252,18 @@ class VecFrameStack(VecEnvWrapper):
         for (i, new) in enumerate(news):
             if new:
                 # self.stackedobs = 0
-                self.stackedobs[i, ..., :-obs.shape[-1]] = obs[i]
+                if obs[i].shape == self.stackedobs[i].shape:
+                    self.stackedobs[i] = obs[i]
+                else:
+                    self.stackedobs[i, -obs.shape[-1]:] = obs[i]
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs, rews, news, infos
 
     def reset(self):
         obs = self.venv.reset()
         self.stackedobs[...] = 0
-        self.stackedobs[..., -self.nstack:] = obs
+        if obs.shape == self.stackedobs.shape:
+            self.stackedobs = obs
+        else:
+            self.stackedobs[..., -self.nstack:] = obs
         return self.stackedobs
