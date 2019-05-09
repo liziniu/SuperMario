@@ -33,10 +33,10 @@ def make_sample_her_transitions(replay_strategy, replay_k):
             T = max_length
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
-        her_indexes = np.where(np.random.uniform(size=[nenv, T]) < future_p)
+        her_indexes = np.where(np.random.uniform(size=[nenv, T-1]) < future_p)
         nb_her_sample = len(her_indexes[1])
         offset_indexes = np.random.uniform(size=nb_her_sample) * (T - her_indexes[1])
-        max_future_indexes = np.empty(shape=[nenv, T], dtype=np.int32)
+        max_future_indexes = np.empty(shape=[nenv, T-1], dtype=np.int32)
         max_future_indexes.fill(T-1)
         for i in range(nenv):
             done_index = np.where(dones[i][:T])[0]

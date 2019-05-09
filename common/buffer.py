@@ -13,7 +13,6 @@ class ReplayBuffer:
             sample_transitions (function): a function that samples from the replay buffer
         """
         nenv = self.nenv = env.num_envs
-        size = 100
         self.size = size // nenv
         self.nsteps = nsteps
         self.sample_goal_fn = sample_goal_fn
