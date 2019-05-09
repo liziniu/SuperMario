@@ -5,10 +5,10 @@ from baselines.common import set_global_seeds
 from acer.policies import build_policy
 from common.env_util import VecFrameStack
 from acer.buffer import Buffer
-from acer.runner import Runner
+from acer3.runner import Runner
 from common.her_sample import make_sample_her_transitions
-from acer.model import Model
-from acer.util import Acer, vf_dist
+from acer3.model import Model
+from acer3.util import Acer, vf_dist
 from common.env_util import parser_env_id, build_env, get_env_type
 import sys
 from curiosity.dynamics import DummyDynamics, Dynamics

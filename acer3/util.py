@@ -69,7 +69,7 @@ class Acer:
             self.record_episode_info(results["episode_infos"], model_name)
         else:
             results = self.buffer.get(use_cache=use_cache)
-        obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
+        obs, next_obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
 
         if not on_policy:
             self.episode_stats.feed(np.mean(int_rewards), "int_rew_mean")
@@ -78,13 +78,13 @@ class Acer:
         assert self.model_expl.scope != self.model_eval.scope
         if "eval" in update_list:
             names_ops_, values_ops_ = self.model_eval.train_policy(
-                obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
+                obs, next_obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
             names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
             eval_trained = True
             self.nupdates += 1
         if "expl" in update_list:
             names_ops_, values_ops_ = self.model_expl.train_policy(
-                obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
+                obs, next_obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
             names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
             expl_trained = True
 
@@ -141,7 +141,11 @@ class Acer:
         assert self.runner_expl.nbatch == self.runner_eval.nbatch
         runner = self.runner_expl
 
-        obs = results["obs"].reshape(runner.batch_ob_shape)
+        # results["obs"]: (nenv, nsteps+1)
+        obs = results["obs"][:, :-1].copy()
+        next_obs = results["obs"][:, 1:].copy()
+        obs = obs.reshape((runner.nbatch, ) + runner.obs_shape)
+        next_obs = next_obs.reshape((runner.nbatch, ) + runner.obs_shape)
         actions = results["actions"].reshape(runner.nbatch)
         ext_rewards = results["ext_rewards"].reshape(runner.nbatch)
         mus = results["mus"].reshape([runner.nbatch, runner.nact])
@@ -152,8 +156,9 @@ class Acer:
             goal_obs = self.goal_to_embedding(results["goal_infos"])
             goal_obs = goal_obs.reshape([-1, goal_obs.shape[-1]])
         else:
-            goal_obs = results["goal_obs"].reshape(runner.batch_ob_shape)
-        return obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs
+            goal_obs = results["goal_obs"]
+            goal_obs = goal_obs.reshape((runner.nbatch, ) + runner.obs_shape)
+        return obs, next_obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs
 
     @staticmethod
     def goal_to_embedding(goal_infos):

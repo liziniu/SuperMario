@@ -89,7 +89,7 @@ class Runner(AbstractEnvRunner):
         mb_masks = np.empty((self.nenv, self.nsteps + 1), dtype=bool)
         mb_ext_rew = np.empty((self.nenv, self.nsteps), dtype=np.float32)
         mb_obs_infos = np.empty((self.nenv, self.nsteps), dtype=object)
-        mb_goals = np.empty((self.nenv, self.nsteps + 1) + self.goal_shape, dtype=self.obs_dtype)
+        mb_goals = np.empty((self.nenv, self.nsteps) + self.goal_shape, dtype=self.obs_dtype)
         mb_goal_infos = np.empty((self.nenv, self.nsteps), dtype=object)
 
         # mb_obs, mb_actions, mb_mus, mb_dones, mb_ext_rewards = [], [], [], [], []
@@ -310,7 +310,7 @@ class Runner(AbstractEnvRunner):
 
         # next obs and next goal
         mb_obs[:, -1] = deepcopy(self.obs)
-        mb_goals[:, -1] = mb_goals[:, -2]  # we cannot use self.goal since it way be revised
+        # mb_goals[:, -1] = mb_goals[:, -2]  # next goal is same with the current goal by definition
 
         if self.dist_type == "l2":
             raise NotImplementedError
