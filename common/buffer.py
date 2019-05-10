@@ -13,8 +13,8 @@ class ReplayBuffer:
             sample_transitions (function): a function that samples from the replay buffer
         """
         nenv = self.nenv = env.num_envs
-        self.size = size // nenv
         self.nsteps = nsteps
+        self.size = size // (nenv * self.nsteps)
         self.sample_goal_fn = sample_goal_fn
         self.reward_fn = reward_fn
 
@@ -89,21 +89,18 @@ class ReplayBuffer:
                 x = episode_batch[key][i]
                 if self.buffers[i][key] is None:
                     if key in ["obs", "masks"]:
-                        maxlen = self.size // self.nsteps * (self.nsteps + 1)
+                        maxlen = self.size * (self.nsteps + 1)
                     else:
-                        maxlen = self.size // self.nsteps * self.nsteps
+                        maxlen = self.size * self.nsteps
                     self.buffers[i][key] = np.empty((maxlen, ) + x.shape[1:], dtype=x.dtype)
                 if key in ["obs", "masks"]:
                     start, end = self.current_size*(self.nsteps+1), (self.current_size+1)*(self.nsteps+1)
-                    try:
-                        self.buffers[i][key][start:end] = x
-                    except Exception as e:
-                        print(e)
+                    self.buffers[i][key][start:end] = x
                 else:
                     start, end = self.current_size*self.nsteps, (self.current_size+1)*self.nsteps
                     self.buffers[i][key][start:end] = x
         self.current_size += 1
-        self.current_size %= self.size // self.nsteps
+        self.current_size %= self.size
 
     @property
     def memory_usage(self):

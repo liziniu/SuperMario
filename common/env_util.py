@@ -255,7 +255,7 @@ class VecFrameStack(VecEnvWrapper):
                 if obs[i].shape == self.stackedobs[i].shape:
                     self.stackedobs[i] = obs[i]
                 else:
-                    self.stackedobs[i, -obs.shape[-1]:] = obs[i]
+                    self.stackedobs[i, ..., :-obs.shape[-1]] = obs[i]
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs, rews, news, infos
 
