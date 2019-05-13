@@ -11,8 +11,7 @@ from baselines import logger
 from baselines.bench import Monitor
 from baselines.common import set_global_seeds
 from common.atari_wrappers import wrap_deepmind, MaxAndSkipEnv, NoopResetEnv, TimeLimit
-from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
-from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
+from common.vec_env import SubprocVecEnv, DummyVecEnv
 from baselines.common import retro_wrappers
 import os
 from baselines.common.vec_env import VecEnvWrapper
