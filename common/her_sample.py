@@ -2,7 +2,7 @@ import numpy as np
 from copy import deepcopy
 
 
-def make_sample_her_transitions(replay_strategy, replay_k):
+def make_sample_her_transitions(replay_strategy, replay_k, replay_t=None):
     """Creates a sample function that can be used for HER experience replay.
 
     Args:
@@ -14,8 +14,11 @@ def make_sample_her_transitions(replay_strategy, replay_k):
     """
     if replay_strategy == 'future':
         future_p = 1 - (1. / (1 + replay_k))
-    else:  # 'replay_strategy' == 'none'
-        future_p = 0
+    elif replay_strategy == 'fixed':
+        future_p = 1 - (1. / (1 + replay_k))
+        future_t = replay_t
+    else:
+        raise NotImplementedError
 
     def _sample_her_transitions(dones, max_length=None):
         """
@@ -33,17 +36,21 @@ def make_sample_her_transitions(replay_strategy, replay_k):
             T = max_length
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
-        her_indexes = np.where(np.random.uniform(size=[nenv, T-1]) < future_p)
+        her_indexes = np.where(np.random.uniform(size=[nenv, T]) < future_p)
         nb_her_sample = len(her_indexes[1])
-        offset_indexes = np.random.uniform(size=nb_her_sample) * (T - her_indexes[1])
-        max_future_indexes = np.empty(shape=[nenv, T-1], dtype=np.int32)
+        if replay_strategy == 'future':
+            offset_indexes = np.random.uniform(size=nb_her_sample) * (T - her_indexes[1])
+        elif replay_strategy == 'fixed':
+            offset_indexes = np.minimum(her_indexes[1] + future_t, T-1)
+        max_future_indexes = np.empty(shape=[nenv, T], dtype=np.int32)
         max_future_indexes.fill(T-1)
         for i in range(nenv):
             done_index = np.where(dones[i][:T])[0]
             start = 0
             for idx in done_index:
                 end = idx
-                max_future_indexes[i][start:end] = idx - 1  # we cannot choose done's next_state
+                # max_future_indexes[i][start:end] = idx - 1  # we cannot choose done's next_state
+                max_future_indexes[i][start:end] = idx
                 start = idx
         max_future_indexes = max_future_indexes[her_indexes]  # downsample
         future_indexes = offset_indexes.astype(int) + her_indexes[1]
