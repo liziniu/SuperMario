@@ -4,7 +4,7 @@ from baselines import logger
 from baselines.common import set_global_seeds
 from acer.policies import build_policy
 from common.env_util import VecFrameStack
-from her.buffer import Buffer
+from her.buffer import ReplayBuffer
 from her.runner import Runner
 from common.her_sample import make_sample_her_transitions
 from her.model import Model
@@ -12,16 +12,14 @@ from her.util import Acer, vf_dist
 import sys
 from baselines.common.tf_util import get_session
 import os
-from common.buffer import ReplayBuffer
 from her.defaults import get_store_keys, THRESHOLD
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
-          alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, eval_interval=300, dist_type="l1",
-          save_model=False, simple_store=True, goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None,
-          her=True, buffer2=True, **network_kwargs):
+          alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, dist_type="l1", save_model=False,
+          goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -121,12 +119,12 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         return np.exp(-np.sum(np.square(current_state-desired_goal), -1) /
                         (eps+np.sum(np.square(desired_goal), -1)))
 
-    def reward_fn_v2(current_pos_infos, goal_pos_infos, sparse=True):
-        assert current_pos_infos.shape == goal_pos_infos.shape
+    def reward_fn_v2(next_pos_infos, goal_pos_infos, sparse=True):
+        assert next_pos_infos.shape == goal_pos_infos.shape
         coeff = 0.03
         threshold = THRESHOLD
 
-        dist = vf_dist(current_pos_infos, goal_pos_infos)
+        dist = vf_dist(next_pos_infos, goal_pos_infos)
         if sparse:
             rewards = (dist < threshold).astype(float)
         else:
@@ -156,18 +154,12 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                 return sample
             sample_goal_fn = dummpy_sample()
         assert env.num_envs == env_eval.num_envs
-        if buffer2:
-            buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
-                                  keys=get_store_keys(), reward_fn=reward_fn)
-        else:
-            buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, reward_fn=reward_fn, sample_goal_fn=sample_goal_fn,
-                            goal_shape=model.goal_shape)
+        buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
+                              keys=get_store_keys(), reward_fn=reward_fn, her=her)
     else:
         buffer = None
     acer = Acer(runner, model, buffer, log_interval,)
     acer.tstart = time.time()
-
-    # === init to make sure we can get goal ===
 
     replay_start = replay_start * env.num_envs / (env.num_envs + env_eval.num_envs)
     onpolicy_cnt = 0

@@ -25,6 +25,7 @@ class Runner(AbstractEnvRunner):
 
         # self.obs = env.reset()
         self.obs_dtype = env.observation_space.dtype
+        self.obs_shape = env.observation_space.shape
         self.ac_dtype = env.action_space.dtype
         self.nstack = self.env.nstack
         self.nc = self.batch_ob_shape[-1] // self.nstack
@@ -42,10 +43,8 @@ class Runner(AbstractEnvRunner):
         self.reward_fn = reward_fn
 
     def run(self):
-        # enc_obs = np.split(self.obs, self.nstack, axis=3)  # so now list of obs steps
-        enc_obs = np.split(self.env.stackedobs, self.env.nstack, axis=-1)
         mb_obs, mb_actions, mb_mus, mb_dones, mb_rewards, mb_goals = [], [], [], [], [], [],
-        mb_obs_infos, mb_goal_infos = [], []
+        mb_next_obs_infos, mb_goal_infos, mb_next_obs = [], [], []
         episode_info = {}
         for _ in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
@@ -71,12 +70,13 @@ class Runner(AbstractEnvRunner):
                     self.episode_step[env_idx] = 0
 
                     assert self.nenv == 1
+                    mb_next_obs.append(obs)             # todo: only works for env = 1
+                    mb_next_obs_infos.append(infos)
+
+                    assert self.nenv == 1
                     dones[:] = True
                     obs = self.env.reset()
-                    # self.goals, self.goal_infos = self.step_goal()
                 elif dones[env_idx]:
-                    # self.goals, self.goal_infos = self.step_goal()
-
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                     mem = dict(env=env_idx, succ=False, length=self.episode_step[env_idx], final_pos=final_pos)
                     self.recoder.store(mem)
@@ -88,45 +88,49 @@ class Runner(AbstractEnvRunner):
                     if infos[env_idx].get("episode"):
                         episode_info["episode"] = infos[env_idx].get("episode")
                     self.episode_step[env_idx] = 0
+
+                    next_obs = obs.copy()
+                    o = infos[env_idx].get("next_obs", None)
+                    next_obs[env_idx] = o
+                    assert next_obs is not None
+                    mb_next_obs.append(next_obs)
+                    mb_next_obs_infos.append(infos)
+                else:
+                    mb_next_obs.append(obs)
+                    mb_next_obs_infos.append(infos)
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
             self.obs = obs
-            mb_rewards.append(rewards)
-            enc_obs.append(obs[..., -self.nc:])
-            mb_obs_infos.append(infos)
-        mb_obs.append(np.copy(self.obs))
         mb_dones.append(self.dones)
-        mb_goals.append(np.copy(self.goals))
 
-        enc_obs = np.asarray(enc_obs, dtype=self.obs_dtype).swapaxes(1, 0)
         mb_obs = np.asarray(mb_obs, dtype=self.obs_dtype).swapaxes(1, 0)
         mb_actions = np.asarray(mb_actions, dtype=self.ac_dtype).swapaxes(1, 0)
-        mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
         mb_mus = np.asarray(mb_mus, dtype=np.float32).swapaxes(1, 0)
         mb_goals = np.asarray(mb_goals, dtype=self.goals.dtype).swapaxes(1, 0)
         mb_dones = np.asarray(mb_dones, dtype=np.bool).swapaxes(1, 0)
 
+        mb_next_obs = np.asarray(mb_next_obs, dtype=self.obs_dtype).swapaxes(1, 0)
+
         mb_masks = mb_dones # Used for statefull models like LSTM's to mask state when done
         mb_dones = mb_dones[:, 1:] # Used for calculating returns. The dones array is now aligned with rewards
 
-        mb_obs_infos = np.asarray(mb_obs_infos, dtype=object).swapaxes(1, 0)
+        mb_next_obs_infos = np.asarray(mb_next_obs_infos, dtype=object).swapaxes(1, 0)
         mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
-        mb_int_rewards = self.reward_fn(mb_obs_infos, mb_goal_infos)
+        mb_rewards = self.reward_fn(mb_next_obs_infos, mb_goal_infos)
+
         # shapes are now [nenv, nsteps, []]
         # When pulling from buffer, arrays will now be reshaped in place, preventing a deep copy.
-
         results = dict(
-            enc_obs=enc_obs,
             obs=mb_obs,
+            next_obs=mb_next_obs,
             actions=mb_actions,
-            ext_rewards=mb_rewards,
-            int_rewards=mb_int_rewards,
+            rewards=mb_rewards,
             mus=mb_mus,
             dones=mb_dones,
             masks=mb_masks,
             goal_obs=mb_goals,
-            obs_infos=mb_obs_infos,
+            next_obs_infos=mb_next_obs_infos,
             goal_infos=mb_goal_infos,
             episode_info=episode_info,
         )
