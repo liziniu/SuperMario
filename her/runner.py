@@ -42,12 +42,14 @@ class Runner(AbstractEnvRunner):
 
         self.reward_fn = reward_fn
 
-    def run(self):
+    def run(self, debug=False):
         mb_obs, mb_actions, mb_mus, mb_dones, mb_rewards, mb_goals = [], [], [], [], [], [],
         mb_next_obs_infos, mb_goal_infos, mb_next_obs = [], [], []
         episode_info = {}
         for _ in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
+            if debug:
+                self.env.render()
             mb_obs.append(np.copy(self.obs))
             mb_actions.append(actions)
             mb_mus.append(mus)

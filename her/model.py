@@ -1,7 +1,7 @@
 import functools
 import tensorflow as tf
 from baselines import logger
-from baselines.common.tf_util import get_session, save_variables
+from baselines.common.tf_util import get_session, save_variables, load_variables
 from baselines.a2c.utils import batch_to_seq, seq_to_batch
 from baselines.a2c.utils import cat_entropy_softmax
 from baselines.a2c.utils import Scheduler, find_trainable_variables
@@ -56,9 +56,8 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 
 class Model(object):
     def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma,
-                 max_grad_norm, lr,
-                 rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope,
-                 goal_shape):
+                 max_grad_norm, lr, rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region,
+                 alpha, delta, scope, goal_shape, load_path, debug):
         self.sess = sess
         self.nenv = nenvs
         self.goal_shape = goal_shape
@@ -257,7 +256,10 @@ class Model(object):
         self.save = functools.partial(save_variables, sess=self.sess, variables=params)
 
         self.initial_state = self.step_model.initial_state
-        tf.global_variables_initializer().run(session=self.sess)
+        if debug:
+            load_variables(load_path, self.params, self.sess)
+        else:
+            tf.global_variables_initializer().run(session=self.sess)
 
     def train_policy(self, obs, next_obs, actions, rewards, dones, mus, states, masks, steps, goal_obs, verbose=False):
         cur_lr = self.lr.value_steps(steps)

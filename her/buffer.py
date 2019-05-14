@@ -76,6 +76,7 @@ class ReplayBuffer:
                     error = np.sum(np.abs(cache[i]["rewards"] - rewards))
                     assert error < 1e-6, "error:{}".format(error)
                     cache[i]["goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
+                    cache[i]["goal_obs"][her_index] = cache[i]["next_obs"][future_index]
             self._cache = cache.copy()
         else:
             cache = self._cache.copy()
