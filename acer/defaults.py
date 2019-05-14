@@ -6,9 +6,11 @@ def atari():
         replay_start=200,
         goal_shape=(84, 84, 4),  #(512, )
         normalize_novelty=True,
+        threshold=3,
     )
 
 
 def get_store_keys():
-    return ["obs", "actions", "ext_rewards", "mus", "dones",
-            "masks", "goal_obs", "goal_infos",  "obs_infos"]
+    return ["obs", "next_obs", "actions", "int_rewards", "ext_rewards", "mus", "ext_dones", "int_dones",
+            "masks", "goal_obs", "goal_infos",  "next_obs_infos"]
+

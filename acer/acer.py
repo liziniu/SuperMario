@@ -4,17 +4,16 @@ from baselines import logger
 from baselines.common import set_global_seeds
 from acer.policies import build_policy
 from common.env_util import VecFrameStack
-from acer.buffer import Buffer
 from acer.runner import Runner
 from common.her_sample import make_sample_her_transitions
 from acer.model import Model
-from acer.util import Acer, vf_dist
+from acer.util import Acer
 from common.env_util import parser_env_id, build_env, get_env_type
 import sys
 from curiosity.dynamics import DummyDynamics, Dynamics
 from baselines.common.tf_util import get_session
 import os
-from common.buffer import ReplayBuffer
+from acer.buffer import ReplayBuffer
 from acer.defaults import get_store_keys
 
 
@@ -23,8 +22,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           log_interval=50, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
           env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
-          dyna_source_list=["acer_eval", "acer_expl"], dist_type="l1", use_random_policy_expl=True, goal_shape=None, 
-          normalize_novelty=False, save_model=False, buffer2=True, **network_kwargs):
+          dyna_source_list=["acer_eval", "acer_expl"], use_random_policy_expl=True, goal_shape=None, her=False,
+          normalize_novelty=False, save_model=False, threshold=3, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -111,7 +110,8 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     nstack = env.nstack
     sess = get_session()
-    dynamics = Dynamics(sess=sess, env=env, auxiliary_task=aux_task, queue_size=queue_size, feat_dim=feat_dim, normalize_novelty=normalize_novelty)
+    dynamics = Dynamics(sess=sess, env=env, auxiliary_task=aux_task, queue_size=queue_size, feat_dim=feat_dim,
+                        normalize_novelty=normalize_novelty)
     dummy_dynamics = DummyDynamics(goal_shape)
     model_exploration = Model(
         sess=sess, policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
@@ -126,45 +126,30 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dummy_dynamics, scope="acer_eval",
         goal_shape=goal_shape)
 
-    def reward_fn_v1(current_state, desired_goal):
-        eps = 1e-6
-        return np.exp(-np.sum(np.square(current_state-desired_goal), -1) /
-                        (eps+np.sum(np.square(desired_goal), -1)))
+    def f(current_pos, goal_pos):
+        diff_x = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"]))
+        diff_y = abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
+        return diff_x <= threshold and diff_y <= threshold
+    vf = np.vectorize(f)
 
-    def reward_fn_v2(current_pos_infos, goal_pos_infos, sparse=True):
+    def reward_fn(current_pos_infos, goal_pos_infos):
         assert current_pos_infos.shape == goal_pos_infos.shape
-        coeff = 0.03
-        threshold = 20
 
-        dist = vf_dist(current_pos_infos, goal_pos_infos)
-        if sparse:
-            rewards = (dist < threshold).astype(float)
-        else:
-            rewards = np.exp(-coeff * dist)
-        return rewards
-
-    assert dist_type in ["l1", "l2"]
-    if dist_type == "l2":
-        reward_fn = reward_fn_v1
-    else:
-        reward_fn = reward_fn_v2
+        stats = vf(current_pos_infos, goal_pos_infos)
+        return stats.astype(float)
 
     # we still need two runner to avoid one reset others' envs.
     runner_expl = Runner(env=env, model=model_exploration, nsteps=nsteps, store_data=store_data,
-                         reward_fn=reward_fn, sample_goal=True, dist_type=dist_type, alt_model=model_evaluation,
+                         reward_fn=reward_fn, sample_goal=True, alt_model=model_evaluation, threshold=threshold,
                          use_random_policy_expl=use_random_policy_expl)
     runner_eval = Runner(env=env_eval, model=model_evaluation, nsteps=nsteps, store_data=store_data,
-                         reward_fn=reward_fn, sample_goal=False, dist_type=dist_type)
+                         reward_fn=reward_fn, sample_goal=False,)
 
     if replay_ratio > 0:
         sample_goal_fn = make_sample_her_transitions("future", replay_k)
         assert env.num_envs == env_eval.num_envs
-        if buffer2:
-            buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
-                                  keys=get_store_keys(), reward_fn=reward_fn)
-        else:
-            buffer = Buffer(env=env, nsteps=nsteps, size=buffer_size, reward_fn=reward_fn, sample_goal_fn=sample_goal_fn,
-                            goal_shape=model_exploration.goal_shape)
+        buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
+                              keys=get_store_keys(), reward_fn=reward_fn, her=her)
     else:
         buffer = None
     nbatch_expl = nenvs*nsteps

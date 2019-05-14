@@ -56,9 +56,9 @@ class Acer:
             results = runner.run(acer_step=self.steps)
             self.buffer.put(results)
             # training dynamics & put goals
-            mb_obs, mb_actions, mb_next_obs, mb_obs_infos = self.adjust_dynamics_input_shape(results)
+            mb_obs, mb_actions, mb_next_obs, mb_next_obs_infos = self.adjust_dynamics_input_shape(results)
             if model_name in self.dyna_source_list:
-                queue_info = self.model_expl.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_obs_infos)
+                queue_info = self.model_expl.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_next_obs_infos)
                 if len(queue_info.keys()) > 0:
                     self.episode_stats.feed(queue_info["queue_max"], "queue_max")
                     self.episode_stats.feed(queue_info["queue_std"], "queue_std")
@@ -69,7 +69,8 @@ class Acer:
             self.record_episode_info(results["episode_infos"], model_name)
         else:
             results = self.buffer.get(use_cache=use_cache)
-        obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs = self.adjust_policy_input_shape(results)
+        obs, next_obs, actions, masks, mus, ext_rewards, int_rewards, ext_dones, int_dones, goal_obs = \
+            self.adjust_policy_input_shape(results)
 
         if not on_policy:
             self.episode_stats.feed(np.mean(int_rewards), "int_rew_mean")
@@ -78,13 +79,13 @@ class Acer:
         assert self.model_expl.scope != self.model_eval.scope
         if "eval" in update_list:
             names_ops_, values_ops_ = self.model_eval.train_policy(
-                obs, actions, ext_rewards, dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
+                obs, next_obs, actions, ext_rewards, ext_dones, mus, self.model_eval.initial_state, masks, self.steps, goal_obs)
             names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
             eval_trained = True
             self.nupdates += 1
         if "expl" in update_list:
             names_ops_, values_ops_ = self.model_expl.train_policy(
-                obs, actions, int_rewards, dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
+                obs, next_obs, actions, int_rewards, int_dones, mus, self.model_expl.initial_state, masks, self.steps, goal_obs)
             names_ops, values_ops = names_ops + names_ops_, values_ops + values_ops_
             expl_trained = True
 
@@ -97,7 +98,7 @@ class Acer:
                 names_ops, values_ops = names_ops + ["memory_usage(GB)"], values_ops + [self.buffer.memory_usage]
                 self.log(names_ops, values_ops)
             self.log_cnt += 1
-            if self.log_cnt % 2000 == 0 and self.save_model:
+            if self.log_cnt % (self.log_interval * 20) == 0 and self.save_model:
                 self.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(self.steps)))
 
     def initialize(self):
@@ -113,47 +114,42 @@ class Acer:
         self.episode_stats.feed(results["r"], "eval_return")
 
     @staticmethod
-    def adjust_dynamics_input_shape(results, remove_done=True):
+    def adjust_dynamics_input_shape(results):
         # flatten on-policy data (nenv, nstep, ...) for dynamics training and put_goal
-        mb_obs = results["obs"][:, :-1]
-        mb_next_obs = results["obs"][:, 1:]
+        mb_obs = results["obs"]
+        mb_next_obs = results["next_obs"]
         mb_obs = mb_obs.reshape((-1,) + mb_obs.shape[2:])
         mb_next_obs = mb_next_obs.reshape((-1,) + mb_next_obs.shape[2:])
         mb_actions = results["actions"]
         mb_actions = mb_actions.reshape((-1,) + mb_actions.shape[2:])
-        mb_obs_infos = results["obs_infos"]
-        mb_obs_infos = mb_obs_infos.reshape(-1)
+        mb_next_obs_infos = results["next_obs_infos"]
+        mb_next_obs_infos = mb_next_obs_infos.reshape(-1)
 
-        if remove_done:
-            # remove done=True transitions since these data's next_obs is impossible to predict
-            mb_dones = results["dones"]
-            mb_dones = mb_dones.reshape((-1, ))
-            mb_select = (1 - mb_dones).astype(np.bool)
-
-            mb_obs = mb_obs[mb_select]
-            mb_next_obs = mb_next_obs[mb_select]
-            mb_actions = mb_actions[mb_select]
-            mb_obs_infos = mb_obs_infos[mb_select]
-
-        return mb_obs, mb_actions, mb_next_obs, mb_obs_infos
+        return mb_obs, mb_actions, mb_next_obs, mb_next_obs_infos
 
     def adjust_policy_input_shape(self, results):
         assert self.runner_expl.nbatch == self.runner_eval.nbatch
         runner = self.runner_expl
 
-        obs = results["obs"].reshape(runner.batch_ob_shape)
+        obs = results["obs"]
+        next_obs = results["next_obs"]
+        obs = obs.reshape((-1,) + obs.shape[2:])
+        next_obs = next_obs.reshape((-1,) + next_obs.shape[2:])
+
         actions = results["actions"].reshape(runner.nbatch)
-        ext_rewards = results["ext_rewards"].reshape(runner.nbatch)
-        mus = results["mus"].reshape([runner.nbatch, runner.nact])
-        dones = results["dones"].reshape([runner.nbatch])
         masks = results["masks"].reshape([runner.batch_ob_shape[0]])
+        mus = results["mus"].reshape([runner.nbatch, runner.nact])
+        ext_rewards = results["ext_rewards"].reshape(runner.nbatch)
         int_rewards = results["int_rewards"].reshape([runner.nbatch])
+        ext_dones = results["ext_dones"].reshape(runner.nbatch)
+        int_dones = results["int_dones"].reshape(runner.nbatch)
         if not self.goal_as_image:
             goal_obs = self.goal_to_embedding(results["goal_infos"])
             goal_obs = goal_obs.reshape([-1, goal_obs.shape[-1]])
         else:
-            goal_obs = results["goal_obs"].reshape(runner.batch_ob_shape)
-        return obs, actions, ext_rewards, mus, dones, masks, int_rewards, goal_obs
+            goal_obs = results["goal_obs"]
+            goal_obs = goal_obs.reshape((-1,) + goal_obs.shape[2:])
+        return obs, next_obs, actions, masks, mus, ext_rewards, int_rewards, ext_dones, int_dones, goal_obs
 
     @staticmethod
     def goal_to_embedding(goal_infos):
@@ -217,4 +213,94 @@ def f_dist(current_pos, goal_pos):
            abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
     return dist
 
-vf_dist = np.vectorize(f_dist)
+
+def check_obs(obs):
+    nenv, nc = obs.shape[0], obs.shape[-1]
+    for i in range(nenv):
+        for c in range(nc):
+            if np.sum(obs[i][:, :, c]) == 0:
+                logger.warn("acer_step:{}, runner_step:{}, empty obs".format(acer_step, step))
+                raise ValueError
+
+
+def check_infos(infos, recorder, dones, acer_step):
+    stage, world = infos[0].get("stage"), infos[0].get("world")
+    for info in infos[1:]:
+        if info.get("stage") != stage:
+            logger.warn("warning!wrong infos!program continues anyway")
+            logger.info("infos:{}, dones:{}, acer_step:{}".format(infos, dones, acer_step))
+            logger.info("please debug it in runner_data/data.pkl")
+            recorder.store(infos)
+            recorder.dump()
+        if info.get("world") != stage:
+            logger.warn("warning!wrong infos!program continues anyway")
+            logger.info("infos:{}, dones:{}, acer_step:{}".format(infos, dones, acer_step))
+            logger.info("please debug it in runner_data/data.pkl")
+            recorder.store(infos)
+            recorder.dump()
+
+
+def goal_to_embedding(goal_infos):
+    feat_dim = 512
+    nb_tile = feat_dim // 2
+    if isinstance(goal_infos, dict):
+        goal_embedding = np.array([goal_infos["x_pos"], goal_infos["y_pos"]], dtype=np.float32).reshape(1, 2)
+        goal_embedding = np.tile(goal_embedding, [1] * len(goal_embedding.shape[:-1]) + [nb_tile])
+        return goal_embedding
+
+    def get_pos(x):
+        return float(x["x_pos"]), float(x["y_pos"])
+
+    vf = np.vectorize(get_pos)
+    goal_pos = vf(goal_infos)
+    goal_x, goal_y = np.expand_dims(goal_pos[0], -1).astype(np.float32), np.expand_dims(goal_pos[1], -1).astype(
+        np.float32)
+    goal_embedding = np.concatenate([goal_x, goal_y], axis=-1)
+    goal_embedding = np.tile(goal_embedding, [1] * len(goal_embedding.shape[:-1]) + [nb_tile])
+    return goal_embedding
+
+
+def check_goal_reached(obs_info, goal_info, threshold):
+    diff_x = abs(float(obs_info["x_pos"]) - float(goal_info["x_pos"]))
+    diff_y = abs(float(obs_info["y_pos"]) - float(goal_info["y_pos"]))
+    if diff_x <= threshold and diff_y <= threshold:
+        return True
+    else:
+        return False
+
+
+def parse_acer_mode(mode):
+    if mode == 1:
+        # only evaluation policy
+        use_expl_collect = False
+        use_eval_collect = True
+        use_random_policy_expl = None
+        dyna_source_list = ["eval"]
+    elif mode == 2:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = False
+        dyna_source_list = ["eval"]
+    elif mode == 3:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = True
+        dyna_source_list = ["eval"]
+    elif mode == 4:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = True
+        dyna_source_list = ["eval", "expl"]
+    elif mode == 5:
+        use_expl_collect = True
+        use_eval_collect = True
+        use_random_policy_expl = False
+        dyna_source_list = ["eval", "expl"]
+    elif mode == 6:
+        use_expl_collect = True
+        use_eval_collect = False
+        use_random_policy_expl = True
+        dyna_source_list = ["expl"]
+    else:
+        raise ValueError("mode:{} wrong!".format(mode))
+    return use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list

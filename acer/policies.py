@@ -34,7 +34,6 @@ class PolicyWithValue(object):
         """
 
         self.X = observations
-        self.goals = goals
         self.state = tf.constant([])
         self.initial_state = None
         self.__dict__.update(tensors)
@@ -48,6 +47,7 @@ class PolicyWithValue(object):
         self.pdtype = make_pdtype(env.action_space)
 
         if goals is not None:
+            self.goals = goals
             addition_layers = False
             activ = tf.nn.tanh
             nh = 256
