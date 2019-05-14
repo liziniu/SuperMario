@@ -12,9 +12,10 @@ from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
 from curiosity.dynamics import DummyDynamics, Dynamics
-from common.cmd_util import common_arg_parser, parse_unknown_args, parse_acer_mode
+from common.cmd_util import common_arg_parser, parse_unknown_args
+from acer.util import parse_acer_mode
 from common.env_util import build_env
-
+import gym_maze
 try:
     from mpi4py import MPI
 except ImportError:
@@ -60,6 +61,8 @@ def train(args, extra_args):
 
     learn = get_learn_function(args.alg)
     alg_kwargs = get_learn_function_defaults(args.alg, env_type)
+    mode = extra_args.get("mode", None)
+    if mode: extra_args.pop("mode")
     alg_kwargs.update(extra_args)
 
     env = build_env(env_id=args.env, num_env=args.num_env, reward_scale=args.reward_scale, env_type=args.env_type,
@@ -78,7 +81,7 @@ def train(args, extra_args):
     print('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
 
     if args.alg == "acer":
-        use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list = parse_acer_mode(args.mode)
+        use_expl_collect, use_eval_collect, use_random_policy_expl, dyna_source_list = parse_acer_mode(mode)
 
         alg_kwargs["use_expl_collect"] = use_expl_collect
         alg_kwargs["use_eval_collect"] = use_eval_collect
