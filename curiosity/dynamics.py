@@ -103,7 +103,7 @@ class Dynamics:
         path = logger.get_dir()
         path = os.path.join(path, "goal_data")
         self.goal_recoder = DataRecorder(path)
-        self.goal_store_baseline = 500
+        self.goal_store_baseline = 1500
 
         self.density_estimate = deque(maxlen=int(1e4))
 
@@ -151,11 +151,6 @@ class Dynamics:
         x = fc(add_ac(x), nh=n_out_features, scope="output")
         return tf.reduce_mean(tf.square(x - self.out_feat), axis=-1)
 
-    def extract_feature(self, obs):
-        raise NotImplementedError("You should not call this function!")
-        # assert list(obs.shape)[1:] == self.auxiliary_task.obs.get_shape().as_list()[1:], "obs's shape:{} is wrong".format(obs.shape)
-        # return self.sess.run(self.feat, feed_dict={self.auxiliary_task.obs: obs})
-
     def put_goal(self, obs, actions, next_obs, goal_infos):
         assert list(obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "obs shape:{}.please flatten obs".format(obs.shape)
         assert list(actions.shape)[1:] == self.ac.get_shape().as_list()[1:], "action shape:{}.please flatten actions".format(actions.shape)
@@ -177,7 +172,7 @@ class Dynamics:
         if np.max(x_pos) > self.goal_store_baseline:
             self.goal_recoder.store(self.eval_data)
             self.goal_recoder.dump()
-            self.goal_store_baseline += 500
+            self.goal_store_baseline += 1000
             logger.info("store {} goal.now baseline:{}".format(len(self.eval_data), self.goal_store_baseline))
         # store goal into queue according to priority.
         novelty = self.sess.run(self.novelty, feed_dict={self.obs: obs, self.next_obs: next_obs, self.ac: actions})
@@ -189,7 +184,7 @@ class Dynamics:
         stats = self._add_goal(obs, actions, next_obs, goal_infos, priority)
         return stats
 
-    def get_goal(self, nb_goal, replace=True, average=False):
+    def get_goal(self, nb_goal, replace=True, alpha=1.0, beta=0.95):
         assert self.queue.qsize() >= nb_goal
         goal_priority, goal_feat, goal_obs, goal_act, goal_next_obs, goal_info = [], [], [], [], [], []
         while len(goal_obs) != nb_goal:
@@ -205,7 +200,8 @@ class Dynamics:
             goal_next_obs.append(data[4])
             goal_info.append(data[5])
         goal_priority = np.asarray(goal_priority)
-        goal_obs = np.asarray(goal_obs)
+        # IMPORTANT: goal is next_obs in tuple.
+        goals = np.asarray(goal_next_obs)
         if replace:
             goal_act = np.asarray(goal_act)
             goal_next_obs = np.asarray(goal_next_obs)
@@ -216,12 +212,12 @@ class Dynamics:
                 priority = - self.sess.run(self.novelty_normalized, feed_dict={self.novelty_tf: novelty})
             else:
                 priority = - novelty
-            if average:
-                alpha = 0.8
-                priority = alpha * priority + (1-alpha) * goal_priority
+
+            priority = (1-alpha) * priority + alpha * goal_priority
+            priority *= beta
             self._add_goal(goal_obs, goal_act, goal_next_obs, goal_info, priority)
-        assert list(goal_obs.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goal_obs.shape)
-        return goal_obs, goal_info
+        assert list(goals.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goals.shape)
+        return goals, goal_info
 
     def _add_goal(self, obs, actions, next_obs, infos, priority):
         baseline = None
