@@ -191,6 +191,33 @@ class Runner(AbstractEnvRunner):
         self.dynamics.put_goal(mb_obs, mb_actions, mb_next_obs, mb_goal_infos)
         self.obs = self.env.reset()
 
+    def evaluate(self, nb_eval):
+        assert self.dynamics.dummy
+        goal_obs, goal_info = self.dynamics.get_goal(nb_goal=self.nenv)  # (nenv, goal_dim)
+        eval_info = {"l": 0, "r": 0, "x_pos":0, "y_pos":0}
+        for i in range(nb_eval):
+            terminal = False
+            while True:
+                actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=goal_obs)
+                obs, rewards, dones, infos = self.env.step(actions)
+                info = infos[0]
+                if info.get("episode"):
+                    assert dones[0]
+                    eval_info["l"] += info.get("episode")["l"]
+                    eval_info["r"] += info.get("episode")["r"]
+                    eval_info["x_pos"] += info.get("x_pos")
+                    eval_info["y_pos"] += info.get("y_pos")
+                    terminal = True
+                if terminal:
+                    break
+                self.states = states
+                self.dones = dones
+                self.obs = obs
+            self.obs = self.env.reset()
+        for key in eval_info.keys():
+            eval_info[key] /= nb_eval
+        return eval_info
+
     def log(self, mem):
         succ = "succ" if mem["is_succ"] else "fail"
         template = "env_{} {}|goal:{}|final_pos:{}|size:{}".format(

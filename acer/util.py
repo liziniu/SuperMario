@@ -29,10 +29,10 @@ class Acer:
         keys = []
         keys += ["expl_return", "eval_return", "expl_length", "eval_length"]
         keys += ["expl_goal_x", "expl_goal_y", "eval_goal_x", "eval_goal_y", "reward_to_go", "goal_x", "goal_y"]
-        keys += ["reached_cnt", "reached_time", "goal_dist", "expl_final_x", "expl_final_y",
-                 "eval_final_x", "eval_final_y"]
+        keys += ["reached_cnt", "reached_time", "expl_final_x", "expl_final_y", "eval_final_x", "eval_final_y"]
         keys += ["queue_max", "queue_std"]
         keys += ["int_rew_mean", "int_rew_std"]
+        keys += ["her_gain"]
 
         self.logger_keys = keys.copy()
         self.logger_keys.remove("reached_cnt")
@@ -69,12 +69,12 @@ class Acer:
             self.record_episode_info(results["episode_infos"], model_name)
         else:
             results = self.buffer.get(use_cache=use_cache)
+            self.episode_stats.feed(np.mean(results["int_rewards"].flatten()), "int_rew_mean")
+            self.episode_stats.feed(np.std(results["int_rewards"].flatten()), "int_rew_std")
+            self.episode_stats.feed(results["her_gain"], "her_gain")
         obs, next_obs, actions, masks, mus, ext_rewards, int_rewards, ext_dones, int_dones, goal_obs = \
             self.adjust_policy_input_shape(results)
 
-        if not on_policy:
-            self.episode_stats.feed(np.mean(int_rewards), "int_rew_mean")
-            self.episode_stats.feed(np.std(int_rewards), "int_rew_std")
         # Training Policy
         assert self.model_expl.scope != self.model_eval.scope
         if "eval" in update_list:
@@ -112,6 +112,8 @@ class Acer:
         results = self.runner_eval.evaluate(nb_eval)
         self.episode_stats.feed(results["l"], "eval_length")
         self.episode_stats.feed(results["r"], "eval_return")
+        self.episode_stats.feed(results["x_pos"], "eval_final_x")
+        self.episode_stats.feed(results["y_pos"], "eval_final_y")
 
     @staticmethod
     def adjust_dynamics_input_shape(results):
@@ -174,7 +176,6 @@ class Acer:
                 if "expl" in source:
                     self.episode_stats.feed(reached_info["reached"], "reached_cnt")
                     self.episode_stats.feed(reached_info["time_ratio"], "reached_time")
-                    self.episode_stats.feed(reached_info["abs_dist"], "goal_dist")
                 self.episode_stats.feed(reached_info["x_pos"], source + "final_x")
                 self.episode_stats.feed(reached_info["y_pos"], source + "final_y")
             goal_info = info.get("goal_info")
@@ -195,7 +196,6 @@ class Acer:
     def log(self, names_ops, values_ops):
         logger.record_tabular("total_timesteps", self.steps)
         logger.record_tabular("fps", int(self.steps / (time.time() - self.tstart)))
-        logger.record_tabular("time_elapse(min)", int(time.time() - self.tstart) // 60)
         logger.record_tabular("nupdates", self.nupdates)
         for key in self.logger_keys:
             if key == "goal_x" or key == "goal_y" or "final" in key:
