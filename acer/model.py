@@ -238,9 +238,8 @@ class Model(object):
         _policy_opt_op = trainer.apply_gradients(grads)
         if not self.dynamics.dummy:
             _train_dynamics = trainer.minimize(self.dynamics.loss)
-            self.run_ops_dynamics = [_train_dynamics, self.dynamics.aux_loss, self.dynamics.dyna_loss,
-                                     self.dynamics.feat_var]
-            self.name_ops_dynamics = ["aux_loss", "dyna_loss", "goal_feat_var"]
+            self.run_ops_dynamics = [_train_dynamics, self.dynamics.aux_loss, self.dynamics.dyna_loss,]
+            self.name_ops_dynamics = ["aux_loss", "dyna_loss"]
         # so when you call _train, you first do the gradient step, then you apply ema
         with tf.control_dependencies([_policy_opt_op]):
             _train_policy = tf.group(ema_apply_op)
@@ -294,6 +293,15 @@ class Model(object):
         else:
             names_ops_policy = self.names_ops_policy.copy()[:8]  # not including trust region
             values_ops_policy = self.sess.run(self.run_ops_policy, td_map)[1:][:8]
+
+        unimportant_key = ["loss_f", "loss_bc"]
+        for name in names_ops_policy.copy():
+            for suffix in unimportant_key:
+                if name.endswith(suffix):
+                    index = names_ops_policy.index(name)
+                    names_ops_policy.pop(index)
+                    values_ops_policy.pop(index)
+                    break
 
         return names_ops_policy, values_ops_policy
 
