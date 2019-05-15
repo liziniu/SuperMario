@@ -56,9 +56,10 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 class Model(object):
     def __init__(self, sess, policy, dynamics, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma, max_grad_norm, lr,
                  rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region, alpha, delta, scope,
-                 goal_shape):
+                 goal_shape, residual):
         self.sess = sess
         self.nenv = nenvs
+        self.residual = residual
         self.goal_shape = goal_shape
         self.goal_as_image = goal_as_image = len(goal_shape) == 3
         if self.goal_as_image:
@@ -270,7 +271,10 @@ class Model(object):
         td_map = {self.train_model.X: next_obs}
         if not self.dynamics.dummy:
             assert hasattr(self.train_model, "goals")
-            td_map[self.train_model.goals] = goal_obs
+            if self.residual:
+                td_map[self.train_model.goals] = goal_obs - next_obs
+            else:
+                td_map[self.train_model.goals] = goal_obs
         v_next = self.sess.run(self.v, feed_dict=td_map)
         # 2. use obs_t, goal_t, v_{t+1} to train policy
         td_map = {self.train_model.X: obs, self.polyak_model.X: obs, self.A: actions, self.R: rewards, self.D: dones,
@@ -280,8 +284,12 @@ class Model(object):
             assert hasattr(self.polyak_model, "goals")
             if hasattr(self, "goal_rms"):
                 self.goal_rms.update(goal_obs)
-            td_map[self.train_model.goals] = goal_obs
-            td_map[self.polyak_model.goals] = goal_obs
+            if self.residual:
+                td_map[self.train_model.goals] = goal_obs - obs
+                td_map[self.polyak_model.goals] = goal_obs - obs
+            else:
+                td_map[self.train_model.goals] = goal_obs
+                td_map[self.polyak_model.goals] = goal_obs
         if states is not None:
             td_map[self.train_model.S] = states
             td_map[self.train_model.M] = masks
@@ -318,6 +326,8 @@ class Model(object):
         return self.name_ops_dynamics.copy(), value_ops_dynamics
 
     def step(self, observation, **kwargs):
+        if self.residual and not self.dynamics.dummy:
+            kwargs["goals"] = kwargs["goals"] - observation
         return self.step_model.evaluate([self.step_model.action, self.step_model_p, self.step_model.state],
                                         observation, **kwargs)
         

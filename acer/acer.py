@@ -21,7 +21,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
-          env_eval=None, eval_interval=300, use_eval_collect=True, use_expl_collect=True, aux_task="RF",
+          env_eval=None, eval_interval=30, use_eval_collect=True, use_expl_collect=True, aux_task="RF", residual=True,
           dyna_source_list=["acer_eval", "acer_expl"], use_random_policy_expl=True, goal_shape=None, her=False,
           normalize_novelty=False, save_model=False, threshold=3, **network_kwargs):
 
@@ -118,13 +118,13 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
         rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
         trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dynamics, scope="acer_expl",
-        goal_shape=goal_shape,)
+        goal_shape=goal_shape, residual=residual)
     model_evaluation = Model(
         sess=sess, policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
         q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
         rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
         trust_region=trust_region, alpha=alpha, delta=delta, dynamics=dummy_dynamics, scope="acer_eval",
-        goal_shape=goal_shape)
+        goal_shape=goal_shape, residual=residual)
 
     def f(current_pos, goal_pos):
         diff_x = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"]))
@@ -187,7 +187,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                         pass
                         # acer.call(on_policy=False, update_list=["expl"])
         if not use_eval_collect and onpolicy_cnt % eval_interval == 0:
-            acer.evaluate(nb_eval=1)
+            acer.evaluate(nb_eval=2)
     acer.save(os.path.join(logger.get_dir(), "models", "{}.pkl".format(acer.steps)))
 
     return model_evaluation
