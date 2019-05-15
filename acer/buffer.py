@@ -54,7 +54,7 @@ class ReplayBuffer:
             cache = [{} for _ in range(self.nenv)]
             for i in range(self.nenv):
                 if downsample:
-                    interval = 20     # 20 sub-trajectories
+                    interval = 50     # 50 sub-trajectories
                     if self.current_size < interval:
                         start, end = 0, self.current_size
                     else:
@@ -69,8 +69,8 @@ class ReplayBuffer:
                         cache[i][key] = self.buffers[i][key][start*self.nsteps:end*self.nsteps].copy()
             if self.her:
                 for i in range(self.nenv):
-                    ext_dones = cache[i]["ext_dones"]
-                    her_index, future_index = self.sample_goal_fn(ext_dones)
+                    int_dones = cache[i]["int_dones"]
+                    her_index, future_index = self.sample_goal_fn(int_dones)
                     rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["goal_infos"][None, :])
                     rewards = rewards.flatten()
                     error = np.sum(np.abs(cache[i]["int_rewards"] - rewards))
