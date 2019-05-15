@@ -21,7 +21,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=8, replay_start=10000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, store_data=False, feat_dim=512, queue_size=1000,
-          env_eval=None, eval_interval=30, use_eval_collect=True, use_expl_collect=True, aux_task="RF", residual=True,
+          env_eval=None, eval_interval=30, use_eval_collect=True, use_expl_collect=True, aux_task="RF", residual=False,
           dyna_source_list=["acer_eval", "acer_expl"], use_random_policy_expl=True, goal_shape=None, her=False,
           normalize_novelty=False, save_model=False, threshold=3, **network_kwargs):
 
