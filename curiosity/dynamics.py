@@ -213,8 +213,7 @@ class Dynamics:
             else:
                 priority = - novelty
 
-            priority = (1-alpha) * priority + alpha * goal_priority
-            priority *= beta
+            priority = (1-alpha) * goal_priority * beta + alpha * priority
             self._add_goal(goal_obs, goal_act, goal_next_obs, goal_info, priority)
         assert list(goals.shape)[1:] == self.obs.get_shape().as_list()[1:], "goal_obs:{}".format(goals.shape)
         return goals, goal_info
