@@ -94,9 +94,12 @@ class ReplayBuffer:
 
         for key in self.keys:
             samples[key] = np.asarray(samples[key])
-        int_rewards = np.mean(samples["int_rewards"])
+        int_rewards = samples["int_rewards"]
         new_rewards = self.reward_fn(samples["next_obs_infos"], samples["goal_infos"])
-        samples["her_gain"] = new_rewards - int_rewards
+        samples["her_gain"] = np.mean(new_rewards) - np.mean(int_rewards)
+        if samples["her_gain"] < 0:
+            raise ValueError("her_gain:{} should > 0.".format(samples["her_gain"]))
+
         samples["int_rewards"] = new_rewards
 
         new_dones_index = np.where(new_rewards)
