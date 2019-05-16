@@ -48,13 +48,13 @@ class ReplayBuffer:
     def get(self, use_cache, downsample=True):
         """Returns a dict {key: array(batch_size x shapes[key])}
         """
-        samples = {key: [] for key in self.keys}
+        samples = {key: [] for key in self.keys + ["_goal_infos", "_goal_obs"]}
         samples["her_gain"] = 0.
         if not use_cache:
             cache = [{} for _ in range(self.nenv)]
             for i in range(self.nenv):
                 if downsample:
-                    interval = 20     # 20 sub-trajectories
+                    interval = 50     # 20 sub-trajectories
                     if self.current_size < interval:
                         start, end = 0, self.current_size
                     else:
@@ -75,8 +75,10 @@ class ReplayBuffer:
                     rewards = rewards.flatten()
                     error = np.sum(np.abs(cache[i]["rewards"] - rewards))
                     assert error < 1e-6, "error:{}".format(error)
-                    cache[i]["goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
-                    cache[i]["goal_obs"][her_index] = cache[i]["next_obs"][future_index]
+                    cache[i]["_goal_infos"] = cache[i]["goal_infos"].copy()
+                    cache[i]["_goal_obs"] = cache[i]["goal_obs"].copy()
+                    cache[i]["_goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
+                    cache[i]["_goal_obs"][her_index] = cache[i]["next_obs"][future_index]
             self._cache = cache.copy()
         else:
             cache = self._cache.copy()
@@ -85,22 +87,30 @@ class ReplayBuffer:
             transitions = cache[i]
             real_size = len(transitions["obs"]) // self.nsteps
             index = np.random.randint(0, real_size)
-            for key in self.keys:
+            for key in self.keys + ["_goal_infos", "_goal_obs"]:
                 if key in ["masks"]:
                     start, end = index*(self.nsteps+1), (index+1)*(self.nsteps+1)
                 else:
                     start, end = index*self.nsteps, (index+1)*self.nsteps
                 samples[key].append(transitions[key][start:end])
 
-        for key in self.keys:
+        for key in self.keys + ["_goal_infos", "_goal_obs"]:
             samples[key] = np.asarray(samples[key])
         if self.her:
-            rewards = np.mean(samples["rewards"])
-            new_rewards = self.reward_fn(samples["next_obs_infos"], samples["goal_infos"])
+            rewards = samples["rewards"]
+            new_rewards = self.reward_fn(samples["next_obs_infos"], samples["_goal_infos"])
             new_done_index = np.where(new_rewards.astype(int))
             samples["dones"][new_done_index] = True
-            samples["her_gain"] = new_rewards - rewards
+            samples["her_gain"] = np.mean(new_rewards) - np.mean(rewards)
             samples["rewards"] = new_rewards
+            if samples["her_gain"] < 0.:
+                import ipdb
+                ipdb.set_trace()
+                raise ValueError("her_gain:{} can't be less than 0.".format(samples["her_gain"]))
+            samples["goal_obs"] = samples["_goal_obs"]
+            samples["goal_infos"] = samples["_goal_infos"]
+            samples.pop("_goal_obs")
+            samples.pop("_goal_infos")
         return samples
 
     def put(self, episode_batch):

@@ -17,9 +17,10 @@ from her.defaults import get_store_keys, THRESHOLD
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
-          log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=10000, c=10.0, trust_region=True,
+          log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, dist_type="l1", save_model=False, model_path=None,
-          goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, debug=False, **network_kwargs):
+          goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, debug=False, threshold=3,
+          **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -115,32 +116,21 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         trust_region=trust_region, alpha=alpha, delta=delta, scope="her", goal_shape=goal_shape,
         debug=debug, load_path=model_path)
 
-    def reward_fn_v1(current_state, desired_goal):
-        eps = 1e-6
-        return np.exp(-np.sum(np.square(current_state-desired_goal), -1) /
-                        (eps+np.sum(np.square(desired_goal), -1)))
+    def f(current_pos, goal_pos):
+        diff_x = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"]))
+        diff_y = abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
+        return diff_x <= threshold and diff_y <= threshold
+    vf = np.vectorize(f)
 
-    def reward_fn_v2(next_pos_infos, goal_pos_infos, sparse=True):
-        assert next_pos_infos.shape == goal_pos_infos.shape
-        coeff = 0.03
-        threshold = THRESHOLD
+    def reward_fn(current_pos_infos, goal_pos_infos):
+        assert current_pos_infos.shape == goal_pos_infos.shape
 
-        dist = vf_dist(next_pos_infos, goal_pos_infos)
-        if sparse:
-            rewards = (dist < threshold).astype(float)
-        else:
-            rewards = np.exp(-coeff * dist)
-        return rewards
-
-    assert dist_type in ["l1", "l2"]
-    if dist_type == "l2":
-        reward_fn = reward_fn_v1
-    else:
-        reward_fn = reward_fn_v2
+        stats = vf(current_pos_infos, goal_pos_infos)
+        return stats.astype(float)
 
     # we still need two runner to avoid one reset others' envs.
     runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, load_path=load_path,
-                    desired_x_pos=desired_x_pos)
+                    desired_x_pos=desired_x_pos, threshold=threshold)
 
     if replay_ratio > 0:
         if her:

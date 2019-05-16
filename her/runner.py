@@ -8,12 +8,11 @@ from queue import PriorityQueue
 from common.util import DataRecorder
 import os
 from copy import deepcopy
-from her.defaults import THRESHOLD
 
 
 class Runner(AbstractEnvRunner):
 
-    def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos):
+    def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos, threshold):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space, spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
         assert isinstance(env, VecFrameStack)
@@ -41,6 +40,7 @@ class Runner(AbstractEnvRunner):
         self.episode_step = np.zeros(self.nenv, dtype=np.int32)
 
         self.reward_fn = reward_fn
+        self.threshold = threshold
 
     def run(self, debug=False):
         mb_obs, mb_actions, mb_mus, mb_dones, mb_rewards, mb_goals = [], [], [], [], [], [],
@@ -58,6 +58,10 @@ class Runner(AbstractEnvRunner):
             mb_goal_infos.append(np.copy(self.goal_infos))
             obs, rewards, dones, infos = self.env.step(actions)
             self.episode_step += 1
+
+            next_obs = self.get_real_next_obs(obs, dones, infos)
+            mb_next_obs.append(next_obs)
+            mb_next_obs_infos.append(infos)
             for env_idx in range(self.nenv):
                 reached = self.check_goal_reached_v2(infos[env_idx], self.goal_infos[env_idx])
                 if reached:
@@ -70,10 +74,6 @@ class Runner(AbstractEnvRunner):
                     episode_info["length"] = self.episode_step[env_idx]
                     episode_info["final_pos"] = final_pos
                     self.episode_step[env_idx] = 0
-
-                    assert self.nenv == 1
-                    mb_next_obs.append(obs)             # todo: only works for env = 1
-                    mb_next_obs_infos.append(infos)
 
                     assert self.nenv == 1
                     dones[:] = True
@@ -90,16 +90,6 @@ class Runner(AbstractEnvRunner):
                     if infos[env_idx].get("episode"):
                         episode_info["episode"] = infos[env_idx].get("episode")
                     self.episode_step[env_idx] = 0
-
-                    next_obs = obs.copy()
-                    o = infos[env_idx].get("next_obs", None)
-                    next_obs[env_idx] = o
-                    assert next_obs is not None
-                    mb_next_obs.append(next_obs)
-                    mb_next_obs_infos.append(infos)
-                else:
-                    mb_next_obs.append(obs)
-                    mb_next_obs_infos.append(infos)
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
@@ -120,6 +110,15 @@ class Runner(AbstractEnvRunner):
         mb_next_obs_infos = np.asarray(mb_next_obs_infos, dtype=object).swapaxes(1, 0)
         mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
         mb_rewards = self.reward_fn(mb_next_obs_infos, mb_goal_infos)
+
+        reach_index = np.where(mb_rewards.astype(int))
+        assert np.all(mb_dones[reach_index])
+        for i in reach_index[0]:
+            for j in reach_index[1]:
+                if abs(float(mb_next_obs_infos[i][j]["x_pos"]) - float(mb_goal_infos[i][j]["x_pos"])) > self.threshold:
+                    raise ValueError("{}\n{}".format(mb_next_obs_infos[i][j], mb_goal_infos[i][j]))
+                if abs(float(mb_next_obs_infos[i][j]["y_pos"]) - float(mb_goal_infos[i][j]["y_pos"])) > self.threshold:
+                    raise ValueError("{}\n{}".format(mb_next_obs_infos[i][j], mb_goal_infos[i][j]))
 
         # shapes are now [nenv, nsteps, []]
         # When pulling from buffer, arrays will now be reshaped in place, preventing a deep copy.
@@ -175,15 +174,22 @@ class Runner(AbstractEnvRunner):
             index = dist.index(d)
             self.goal_index_sorted.append(index)
 
-    @staticmethod
-    def check_goal_reached_v2(obs_info, goal_info):
-        eps = THRESHOLD
+    def check_goal_reached_v2(self, obs_info, goal_info):
         obs_x, obs_y = float(obs_info["x_pos"]), float(obs_info["y_pos"])
         goal_x, goal_y = float(goal_info["x_pos"]), float(goal_info["y_pos"])
-        dist = abs(obs_x - goal_x) + abs(obs_y - goal_y)
-        if dist < eps:
+        diff_x = abs(obs_x - goal_x)
+        diff_y = abs(obs_y - goal_y)
+        if diff_x <= self.threshold and diff_y <= self.threshold:
             status = True
         else:
             status = False
         return status
 
+    def get_real_next_obs(self, next_obs, dones, infos):
+        _next_obs = next_obs.copy()
+        for i in range(self.nenv):
+            assert self.nenv == 1
+            if dones[i]:
+                o = infos[i].get("next_obs", None)
+                _next_obs[i] = o
+        return _next_obs
