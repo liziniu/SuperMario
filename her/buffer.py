@@ -1,7 +1,7 @@
 import threading
 import numpy as np
 import sys
-
+from acer.util import goal_to_embedding
 
 def check_reward_fn(next_obs, dones, maze_size):
     nenv, nsteps = next_obs.shape[0], next_obs.shape[1]
@@ -16,7 +16,7 @@ def check_reward_fn(next_obs, dones, maze_size):
 
 
 class ReplayBuffer:
-    def __init__(self, env, sample_goal_fn, reward_fn, nsteps, size, keys, her):
+    def __init__(self, env, sample_goal_fn, reward_fn, nsteps, size, keys, her, goal_shape):
         """Creates a replay buffer.
 
         Args:
@@ -32,6 +32,8 @@ class ReplayBuffer:
 
         self.obs_dtype = env.observation_space.dtype
         self.ac_dtype = env.action_space.dtype
+        self.goal_shape = goal_shape
+        self.goal_as_image = len(goal_shape) == 3
         # self.buffers is {key: array(size_in_episodes x T or T+1 x dim_key)}
         self.keys = keys
         # self._trajectory_buffer = Trajectory(nenv, keys)
@@ -78,7 +80,10 @@ class ReplayBuffer:
                     cache[i]["_goal_infos"] = cache[i]["goal_infos"].copy()
                     cache[i]["_goal_obs"] = cache[i]["goal_obs"].copy()
                     cache[i]["_goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
-                    cache[i]["_goal_obs"][her_index] = cache[i]["next_obs"][future_index]
+                    if self.goal_as_image:
+                        cache[i]["_goal_obs"][her_index] = cache[i]["next_obs"][future_index]
+                    else:
+                        cache[i]["_goal_obs"][her_index] = goal_to_embedding(cache[i]["next_obs_infos"][future_index])
             self._cache = cache.copy()
         else:
             cache = self._cache.copy()

@@ -72,7 +72,7 @@ class Acer:
         mus = results["mus"].reshape([runner.nbatch, runner.nact])
         dones = results["dones"].reshape([runner.nbatch])
         masks = results["masks"].reshape([runner.batch_ob_shape[0]])
-        goal_obs = results["goal_obs"].reshape((runner.nbatch, ) + runner.obs_shape)
+        goal_obs = results["goal_obs"].reshape((runner.nbatch, ) + runner.goal_shape)
         return obs, next_obs, actions, rewards, mus, dones, masks, goal_obs
 
     def record_episode_info(self, episode_info):

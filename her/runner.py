@@ -10,6 +10,15 @@ import os
 from copy import deepcopy
 
 
+def goal_to_embedding(goal_info):
+    # goal_info: dict(); desired shape: (1, 512)
+    feat_dim = 512
+    nb_tile = feat_dim // 2
+    x_pos, y_pos = goal_info["x_pos"], goal_info["y_pos"]
+    goal_embedding = np.array([x_pos, y_pos], dtype=np.float32)[None, :]
+    goal_embedding = np.tile(goal_embedding, [1, nb_tile])
+    return goal_embedding
+
 class Runner(AbstractEnvRunner):
 
     def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos, threshold):
@@ -28,6 +37,8 @@ class Runner(AbstractEnvRunner):
         self.ac_dtype = env.action_space.dtype
         self.nstack = self.env.nstack
         self.nc = self.batch_ob_shape[-1] // self.nstack
+        self.goal_as_image = len(self.model.goal_shape) == 3
+        self.goal_shape = self.model.goal_shape
         
         self.recoder = DataRecorder(os.path.join(logger.get_dir(), "runner_data"))
 
@@ -115,9 +126,9 @@ class Runner(AbstractEnvRunner):
         assert np.all(mb_dones[reach_index])
         for i in reach_index[0]:
             for j in reach_index[1]:
-                if abs(float(mb_next_obs_infos[i][j]["x_pos"]) - float(mb_goal_infos[i][j]["x_pos"])) > self.threshold:
+                if abs(float(mb_next_obs_infos[i][j]["x_pos"])-float(mb_goal_infos[i][j]["x_pos"])) > self.threshold[0]:
                     raise ValueError("{}\n{}".format(mb_next_obs_infos[i][j], mb_goal_infos[i][j]))
-                if abs(float(mb_next_obs_infos[i][j]["y_pos"]) - float(mb_goal_infos[i][j]["y_pos"])) > self.threshold:
+                if abs(float(mb_next_obs_infos[i][j]["y_pos"])-float(mb_goal_infos[i][j]["y_pos"])) > self.threshold[1]:
                     raise ValueError("{}\n{}".format(mb_next_obs_infos[i][j], mb_goal_infos[i][j]))
 
         # shapes are now [nenv, nsteps, []]
@@ -145,7 +156,11 @@ class Runner(AbstractEnvRunner):
             goal, goal_info = data[0], data[1]
             goals.append(goal)
             goal_infos.append(goal_info)
-        goals = np.asarray(goals, dtype=goal.dtype)
+        if self.goal_as_image:
+            goals = np.asarray(goals, dtype=goal.dtype)
+        else:
+            assert nb_goal == 1
+            goals = goal_to_embedding(goal_infos[0])
         goal_infos = np.asarray(goal_infos, dtype=object)
         return goals, goal_infos
 
@@ -179,7 +194,7 @@ class Runner(AbstractEnvRunner):
         goal_x, goal_y = float(goal_info["x_pos"]), float(goal_info["y_pos"])
         diff_x = abs(obs_x - goal_x)
         diff_y = abs(obs_y - goal_y)
-        if diff_x <= self.threshold and diff_y <= self.threshold:
+        if diff_x <= self.threshold[0] and diff_y <= self.threshold[1]:
             status = True
         else:
             status = False

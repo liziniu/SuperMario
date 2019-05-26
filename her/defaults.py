@@ -11,6 +11,7 @@ def atari():
         nb_train_epoch=4,
         desired_x_pos=500,
         replay_start=1000,
+        goal_shape=(512, )
     )
 
 

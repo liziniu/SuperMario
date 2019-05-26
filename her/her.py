@@ -18,8 +18,8 @@ from her.defaults import get_store_keys, THRESHOLD
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
-          alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, dist_type="l1", save_model=False, model_path=None,
-          goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, debug=False, threshold=3,
+          alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, save_model=False, model_path=None,
+          goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, debug=False, threshold=(10, 20),
           **network_kwargs):
 
     '''
@@ -119,7 +119,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     def f(current_pos, goal_pos):
         diff_x = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"]))
         diff_y = abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
-        return diff_x <= threshold and diff_y <= threshold
+        return diff_x <= threshold[0] and diff_y <= threshold[1]
     vf = np.vectorize(f)
 
     def reward_fn(current_pos_infos, goal_pos_infos):
@@ -146,7 +146,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             sample_goal_fn = dummpy_sample()
         assert env.num_envs == env_eval.num_envs
         buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
-                              keys=get_store_keys(), reward_fn=reward_fn, her=her)
+                              keys=get_store_keys(), reward_fn=reward_fn, her=her, goal_shape=goal_shape)
     else:
         buffer = None
     acer = Acer(runner, model, buffer, log_interval,)
