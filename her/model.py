@@ -257,6 +257,7 @@ class Model(object):
 
         self.initial_state = self.step_model.initial_state
         if debug:
+            tf.global_variables_initializer().run(session=self.sess)
             load_variables(load_path, self.params, self.sess)
         else:
             tf.global_variables_initializer().run(session=self.sess)

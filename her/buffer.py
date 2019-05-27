@@ -69,16 +69,17 @@ class ReplayBuffer:
                         cache[i][key] = self.buffers[i][key][start*(self.nsteps+1):end*(self.nsteps+1)].copy()
                     else:
                         cache[i][key] = self.buffers[i][key][start*self.nsteps:end*self.nsteps].copy()
-            if self.her:
-                for i in range(self.nenv):
-                    dones = cache[i]["dones"]
-                    her_index, future_index = self.sample_goal_fn(dones)
-                    rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["goal_infos"][None, :])
-                    rewards = rewards.flatten()
-                    error = np.sum(np.abs(cache[i]["rewards"] - rewards))
-                    assert error < 1e-6, "error:{}".format(error)
-                    cache[i]["_goal_infos"] = cache[i]["goal_infos"].copy()
-                    cache[i]["_goal_obs"] = cache[i]["goal_obs"].copy()
+            for i in range(self.nenv):
+                dones = cache[i]["dones"]
+                her_index, future_index = self.sample_goal_fn(dones)
+                reach_rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["goal_infos"][None, :])
+                reach_rewards = reach_rewards.flatten()
+                reach_index = np.where(reach_rewards.astype(int))
+                error = np.sum(np.abs(cache[i]["rewards"][reach_index] - reach_rewards[reach_index]))
+                assert error < 1e-6, "error:{}".format(error)
+                cache[i]["_goal_infos"] = cache[i]["goal_infos"].copy()
+                cache[i]["_goal_obs"] = cache[i]["goal_obs"].copy()
+                if self.her:
                     cache[i]["_goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
                     if self.goal_as_image:
                         cache[i]["_goal_obs"][her_index] = cache[i]["next_obs"][future_index]
@@ -103,9 +104,18 @@ class ReplayBuffer:
             samples[key] = np.asarray(samples[key])
         if self.her:
             rewards = samples["rewards"]
-            new_rewards = self.reward_fn(samples["next_obs_infos"], samples["_goal_infos"])
-            new_done_index = np.where(new_rewards.astype(int))
-            samples["dones"][new_done_index] = True
+            reach_rewards = self.reward_fn(samples["next_obs_infos"], samples["_goal_infos"])
+            reach_index = np.where(reach_rewards.astype(int))
+            dead_index = np.where(rewards == -1.0)
+
+            samples["dones"][reach_index] = True        # verified by Maze experiments
+
+            new_rewards = np.copy(rewards)
+            if len(reach_index) > 0:
+                new_rewards[reach_index] = 1.0
+            if len(dead_index) > 0:
+                new_rewards[dead_index] = -1.0
+
             samples["her_gain"] = np.mean(new_rewards) - np.mean(rewards)
             samples["rewards"] = new_rewards
             if samples["her_gain"] < 0.:

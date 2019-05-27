@@ -19,6 +19,7 @@ def goal_to_embedding(goal_info):
     goal_embedding = np.tile(goal_embedding, [1, nb_tile])
     return goal_embedding
 
+
 class Runner(AbstractEnvRunner):
 
     def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos, threshold):
@@ -52,6 +53,7 @@ class Runner(AbstractEnvRunner):
 
         self.reward_fn = reward_fn
         self.threshold = threshold
+        self.include_death = False
 
     def run(self, debug=False):
         mb_obs, mb_actions, mb_mus, mb_dones, mb_rewards, mb_goals = [], [], [], [], [], [],
@@ -68,6 +70,7 @@ class Runner(AbstractEnvRunner):
             mb_goals.append(np.copy(self.goals))
             mb_goal_infos.append(np.copy(self.goal_infos))
             obs, rewards, dones, infos = self.env.step(actions)
+            rewards = np.zeros(self.nenv, np.float32)
             self.episode_step += 1
 
             next_obs = self.get_real_next_obs(obs, dones, infos)
@@ -86,6 +89,7 @@ class Runner(AbstractEnvRunner):
                     episode_info["final_pos"] = final_pos
                     self.episode_step[env_idx] = 0
 
+                    rewards[env_idx] = 1.0
                     assert self.nenv == 1
                     dones[:] = True
                     obs = self.env.reset()
@@ -101,10 +105,26 @@ class Runner(AbstractEnvRunner):
                     if infos[env_idx].get("episode"):
                         episode_info["episode"] = infos[env_idx].get("episode")
                     self.episode_step[env_idx] = 0
+                    if (infos[env_idx]['is_dying'] or infos[env_idx]['is_dead']) and self.include_death:
+                        rewards[env_idx] = -1
+                elif self.episode_step[env_idx] > 200 or infos[env_idx]["x_pos"] > self.desired_x_pos + 100:
+                    final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                    mem = dict(env=env_idx, succ=False, length=self.episode_step[env_idx], final_pos=final_pos)
+                    self.recoder.store(mem)
+                    logger.info("env_{} fail!|goal:{}|final_pos:{}|length:{}".format(
+                        env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
+                    episode_info["succ"] = False
+                    episode_info["length"] = self.episode_step[env_idx]
+                    episode_info["final_pos"] = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
+                    self.episode_step[env_idx] = 0
+                    assert self.nenv == 1
+                    dones[:] = True
+                    obs = self.env.reset()
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
             self.obs = obs
+            mb_rewards.append(rewards)
         mb_dones.append(self.dones)
 
         mb_obs = np.asarray(mb_obs, dtype=self.obs_dtype).swapaxes(1, 0)
@@ -120,9 +140,9 @@ class Runner(AbstractEnvRunner):
 
         mb_next_obs_infos = np.asarray(mb_next_obs_infos, dtype=object).swapaxes(1, 0)
         mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
-        mb_rewards = self.reward_fn(mb_next_obs_infos, mb_goal_infos)
-
-        reach_index = np.where(mb_rewards.astype(int))
+        # mb_rewards = self.reward_fn(mb_next_obs_infos, mb_goal_infos)
+        mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
+        reach_index = np.where(mb_rewards == 1.0)
         assert np.all(mb_dones[reach_index])
         for i in reach_index[0]:
             for j in reach_index[1]:
