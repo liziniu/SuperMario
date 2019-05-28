@@ -4,25 +4,15 @@ from common.env_util import VecFrameStack
 from gym import spaces
 import pickle
 from baselines import logger
-from queue import PriorityQueue
+from her.meta_controller import Controller
 from common.util import DataRecorder
 import os
 from copy import deepcopy
 
 
-def goal_to_embedding(goal_info):
-    # goal_info: dict(); desired shape: (1, 512)
-    feat_dim = 512
-    nb_tile = feat_dim // 2
-    x_pos, y_pos = goal_info["x_pos"], goal_info["y_pos"]
-    goal_embedding = np.array([x_pos, y_pos], dtype=np.float32)[None, :]
-    goal_embedding = np.tile(goal_embedding, [1, nb_tile])
-    return goal_embedding
-
-
 class Runner(AbstractEnvRunner):
 
-    def __init__(self, env, model, nsteps, load_path, reward_fn, desired_x_pos, threshold):
+    def __init__(self, env, model, nsteps, load_path, reward_fn, strategy, desired_x_pos, threshold):
         super().__init__(env=env, model=model, nsteps=nsteps)
         assert isinstance(env.action_space, spaces.Discrete), 'This ACER implementation works only with discrete action spaces!'
         assert isinstance(env, VecFrameStack)
@@ -48,7 +38,9 @@ class Runner(AbstractEnvRunner):
         self.x_pos, self.goal_index_sorted = None, None
         self.buffer = []
         self.initialize()
-        self.goals, self.goal_infos = self.get_goal(self.nenv)
+        self.controller = Controller(self.buffer, strategy, self.goal_as_image, desired_x_pos)
+        self.goals, self.goal_infos = self.controller.get_goal(self.nenv)
+
         self.episode_step = np.zeros(self.nenv, dtype=np.int32)
 
         self.reward_fn = reward_fn
@@ -57,7 +49,7 @@ class Runner(AbstractEnvRunner):
 
     def run(self, debug=False):
         mb_obs, mb_actions, mb_mus, mb_dones, mb_rewards, mb_goals = [], [], [], [], [], [],
-        mb_next_obs_infos, mb_goal_infos, mb_next_obs = [], [], []
+        mb_next_obs_infos, mb_goal_infos, mb_next_obs, mb_death = [], [], [], []
         episode_info = {}
         for _ in range(self.nsteps):
             actions, mus, states = self.model.step(self.obs, S=self.states, M=self.dones, goals=self.goals)
@@ -71,6 +63,7 @@ class Runner(AbstractEnvRunner):
             mb_goal_infos.append(np.copy(self.goal_infos))
             obs, rewards, dones, infos = self.env.step(actions)
             rewards = np.zeros(self.nenv, np.float32)
+            death = np.array([False for _ in range(self.nenv)], dtype=np.bool)
             self.episode_step += 1
 
             next_obs = self.get_real_next_obs(obs, dones, infos)
@@ -79,52 +72,72 @@ class Runner(AbstractEnvRunner):
             for env_idx in range(self.nenv):
                 reached = self.check_goal_reached_v2(infos[env_idx], self.goal_infos[env_idx])
                 if reached:
+                    # log info
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                     mem = dict(env=env_idx, succ=True, length=self.episode_step[env_idx], final_pos=final_pos)
                     self.recoder.store(mem)
                     logger.info("env_{} succ!|goal:{}|final_pos:{}|length:{}".format(
                         env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
+                    # episode info
                     episode_info["succ"] = True
                     episode_info["length"] = self.episode_step[env_idx]
                     episode_info["final_pos"] = final_pos
                     self.episode_step[env_idx] = 0
-
+                    # reward and reset
                     rewards[env_idx] = 1.0
                     assert self.nenv == 1
                     dones[:] = True
                     obs = self.env.reset()
+                    # controller
+                    self.controller.update(succ=True)
+                    self.goals, self.goal_infos = self.controller.get_goal(self.nenv)
                 elif dones[env_idx]:
+                    # log info
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                     mem = dict(env=env_idx, succ=False, length=self.episode_step[env_idx], final_pos=final_pos)
                     self.recoder.store(mem)
                     logger.info("env_{} fail!|goal:{}|final_pos:{}|length:{}".format(
                         env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
+                    # episode info
                     episode_info["succ"] = False
                     episode_info["length"] = self.episode_step[env_idx]
                     episode_info["final_pos"] = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                     if infos[env_idx].get("episode"):
                         episode_info["episode"] = infos[env_idx].get("episode")
                     self.episode_step[env_idx] = 0
-                    if (infos[env_idx]['is_dying'] or infos[env_idx]['is_dead']) and self.include_death:
-                        rewards[env_idx] = -1
-                elif self.episode_step[env_idx] > 200 or infos[env_idx]["x_pos"] > self.desired_x_pos + 100:
+                    # reward and death info
+                    if infos[env_idx]['is_dying'] or infos[env_idx]['is_dead']:
+                        death[env_idx] = True
+                        if self.include_death:
+                            rewards[env_idx] = -1
+                    # controller
+                    self.controller.update(succ=False)
+                    self.goals, self.goal_infos = self.controller.get_goal(self.nenv)
+                elif self.episode_step[env_idx] > 300 or infos[env_idx]["x_pos"] > self.goal_infos[env_idx]["x_pos"] + 100:
+                    # log info
                     final_pos = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                     mem = dict(env=env_idx, succ=False, length=self.episode_step[env_idx], final_pos=final_pos)
                     self.recoder.store(mem)
                     logger.info("env_{} fail!|goal:{}|final_pos:{}|length:{}".format(
                         env_idx, self.goal_infos[env_idx], final_pos, self.episode_step[env_idx]))
+                    # episode info
                     episode_info["succ"] = False
                     episode_info["length"] = self.episode_step[env_idx]
                     episode_info["final_pos"] = {"x_pos": infos[env_idx]["x_pos"], "y_pos": infos[env_idx]["y_pos"]}
                     self.episode_step[env_idx] = 0
                     assert self.nenv == 1
+                    # reset
                     dones[:] = True
                     obs = self.env.reset()
+                    # controller
+                    self.controller.update(succ=False)
+                    self.goals, self.goal_infos = self.controller.get_goal(self.nenv)
             # states information for statefull models like LSTM
             self.states = states
             self.dones = dones
             self.obs = obs
             mb_rewards.append(rewards)
+            mb_death.append(death)
         mb_dones.append(self.dones)
 
         mb_obs = np.asarray(mb_obs, dtype=self.obs_dtype).swapaxes(1, 0)
@@ -137,6 +150,7 @@ class Runner(AbstractEnvRunner):
 
         mb_masks = mb_dones # Used for statefull models like LSTM's to mask state when done
         mb_dones = mb_dones[:, 1:] # Used for calculating returns. The dones array is now aligned with rewards
+        mb_death = np.asarray(mb_death, dtype=np.bool).swapaxes(1, 0)
 
         mb_next_obs_infos = np.asarray(mb_next_obs_infos, dtype=object).swapaxes(1, 0)
         mb_goal_infos = np.asarray(mb_goal_infos, dtype=object).swapaxes(1, 0)
@@ -164,25 +178,10 @@ class Runner(AbstractEnvRunner):
             goal_obs=mb_goals,
             next_obs_infos=mb_next_obs_infos,
             goal_infos=mb_goal_infos,
+            deaths=mb_death,
             episode_info=episode_info,
         )
         return results
-
-    def get_goal(self, nb_goal):
-        goals, goal_infos = [], []
-        for i in range(nb_goal):
-            index = self.goal_index_sorted[i]
-            data = self.buffer[index]
-            goal, goal_info = data[0], data[1]
-            goals.append(goal)
-            goal_infos.append(goal_info)
-        if self.goal_as_image:
-            goals = np.asarray(goals, dtype=goal.dtype)
-        else:
-            assert nb_goal == 1
-            goals = goal_to_embedding(goal_infos[0])
-        goal_infos = np.asarray(goal_infos, dtype=object)
-        return goals, goal_infos
 
     def initialize(self):
         f = open(self.load_path, "rb")
@@ -200,14 +199,7 @@ class Runner(AbstractEnvRunner):
         logger.info("goal_x_pos:{}".format(x_pos))
         for i in range(len(obs)):
             self.buffer.append([obs[i], {"x_pos": x_pos[i], "y_pos": y_pos[i]}])
-
-        dist = list(np.abs(self.x_pos - self.desired_x_pos))
-        dist_copy = deepcopy(dist)
-        dist_copy.sort()
-        self.goal_index_sorted = []
-        for d in dist_copy:
-            index = dist.index(d)
-            self.goal_index_sorted.append(index)
+        self.buffer.sort(key=lambda x: x[-1]["x_pos"])
 
     def check_goal_reached_v2(self, obs_info, goal_info):
         obs_x, obs_y = float(obs_info["x_pos"]), float(obs_info["y_pos"])

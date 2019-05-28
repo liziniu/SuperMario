@@ -65,9 +65,10 @@ class Model(object):
         if self.goal_as_image:
             assert self.goal_shape == ob_space.shape
         else:
-            logger.info("normalize goal using RunningMeanStd")
-            with tf.variable_scope("RunningMeanStd", reuse=tf.AUTO_REUSE):
-                self.goal_rms = RunningMeanStd(epsilon=1e-4, shape=self.goal_shape)
+            pass
+            # logger.info("normalize goal using RunningMeanStd")
+            # with tf.variable_scope("RunningMeanStd", reuse=tf.AUTO_REUSE):
+            #     self.goal_rms = RunningMeanStd(epsilon=1e-4, shape=self.goal_shape)
 
         nact = ac_space.n
         nbatch = nenvs * nsteps
@@ -89,9 +90,10 @@ class Model(object):
                 concat_on_latent, train_goal_encoded, step_goal_encoded = False, None, None
             else:
                 step_goal_placeholder = tf.placeholder(tf.float32, (nenvs,) + goal_shape, "step_goal")
-                step_goal_encoded = tf.clip_by_value(
-                    (step_goal_placeholder - self.goal_rms.mean) / self.goal_rms.std,
-                    -5., 5.)
+                # step_goal_encoded = tf.clip_by_value(
+                #     (step_goal_placeholder - self.goal_rms.mean) / self.goal_rms.std,
+                #     -5., 5.)
+                step_goal_encoded = step_goal_placeholder
 
             train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs * nsteps,) + ob_space.shape, "train_ob")
             if goal_as_image:
@@ -102,9 +104,10 @@ class Model(object):
                 train_goal_placeholder = tf.placeholder(tf.float32, (nenvs * nsteps,) + goal_shape,
                                                         "train_goal")
                 concat_on_latent = True
-                train_goal_encoded = tf.clip_by_value(
-                    (train_goal_placeholder - self.goal_rms.mean) / self.goal_rms.std,
-                    -5., 5.)
+                # train_goal_encoded = tf.clip_by_value(
+                #     (train_goal_placeholder - self.goal_rms.mean) / self.goal_rms.std,
+                #     -5., 5.)
+                train_goal_encoded = train_goal_placeholder
             self.step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder, sess=self.sess,
                                      goal_placeholder=step_goal_placeholder, concat_on_latent=concat_on_latent,
                                      goal_encoded=step_goal_encoded)

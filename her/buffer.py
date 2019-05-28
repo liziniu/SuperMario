@@ -71,7 +71,8 @@ class ReplayBuffer:
                         cache[i][key] = self.buffers[i][key][start*self.nsteps:end*self.nsteps].copy()
             for i in range(self.nenv):
                 dones = cache[i]["dones"]
-                her_index, future_index = self.sample_goal_fn(dones)
+                deaths = cache[i]["deaths"]
+                her_index, future_index = self.sample_goal_fn(dones, deaths)
                 reach_rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["goal_infos"][None, :])
                 reach_rewards = reach_rewards.flatten()
                 reach_index = np.where(reach_rewards.astype(int))

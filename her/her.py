@@ -6,7 +6,7 @@ from acer.policies import build_policy
 from common.env_util import VecFrameStack
 from her.buffer import ReplayBuffer
 from her.runner import Runner
-from common.her_sample import make_sample_her_transitions
+from her.her_sample import make_sample_her_transitions
 from her.model import Model
 from her.util import Acer, vf_dist
 import sys
@@ -20,7 +20,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, save_model=False, model_path=None,
           goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, debug=False, threshold=(10, 20),
-          **network_kwargs):
+          reduced_step=5, strategy='simple', **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -102,7 +102,6 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     policy = build_policy(env, network, estimate_q=True, **network_kwargs)
     nenvs = env.num_envs
-    nenvs_eval = env_eval.num_envs
     ob_space = env.observation_space
     ac_space = env.action_space
 
@@ -130,14 +129,14 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     # we still need two runner to avoid one reset others' envs.
     runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, load_path=load_path,
-                    desired_x_pos=desired_x_pos, threshold=threshold)
+                    desired_x_pos=desired_x_pos, threshold=threshold, strategy=strategy)
 
     if replay_ratio > 0:
         if her:
-            sample_goal_fn = make_sample_her_transitions("future", replay_k)
+            sample_goal_fn = make_sample_her_transitions("future", replay_k, reduced_step)
         else:
             def dummpy_sample():
-                def sample(dones, **kwargs):
+                def sample(dones, *args, **kwargs):
                     dummy = np.copy(dones)
                     dummy.fill(False)
                     index = np.where(dummy)
@@ -152,7 +151,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     acer = Acer(runner, model, buffer, log_interval,)
     acer.tstart = time.time()
 
-    replay_start = replay_start * env.num_envs / (env.num_envs + env_eval.num_envs)
+    replay_start = replay_start * nenvs
     onpolicy_cnt = 0
     if debug:
         while True:
