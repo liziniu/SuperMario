@@ -1,7 +1,7 @@
 import numpy as np
-from baselines.common.vec_env.vec_env import VecEnv, clear_mpi_env_vars, CloudpickleWrapper
 from baselines.common.vec_env.util import copy_obs_dict, dict_to_obs, obs_space_info
 import multiprocessing as mp
+from baselines.common.vec_env.vec_env import VecEnv, CloudpickleWrapper, clear_mpi_env_vars
 
 
 class DummyVecEnv(VecEnv):
@@ -64,6 +64,12 @@ class DummyVecEnv(VecEnv):
             self._save_obs(e, obs)
         return self._obs_from_buf()
 
+    def reset_v2(self, env_idx):
+        for e in range(self.num_envs):
+            obs = self.envs[e].reset()
+            self._save_obs(e, obs)
+        return self._obs_from_buf()
+
     def _save_obs(self, e, obs):
         for k in self.keys:
             if k is None:
@@ -93,8 +99,8 @@ def worker(remote, parent_remote, env_fn_wrapper):
             if cmd == 'step':
                 ob, reward, done, info = env.step(data)
                 if done:
-                    info["next_obs"] = ob
                     ob = env.reset()
+                    info['next_obs'] = ob
                 remote.send((ob, reward, done, info))
             elif cmd == 'reset':
                 ob = env.reset()
@@ -163,6 +169,11 @@ class SubprocVecEnv(VecEnv):
             remote.send(('reset', None))
         return _flatten_obs([remote.recv() for remote in self.remotes])
 
+    def reset_v2(self, env_idx):
+        self._assert_not_closed()
+        self.remotes[env_idx].send(('reset', None))
+        return _flatten_obs([self.remotes[env_idx].recv()])
+
     def close_extras(self):
         self.closed = True
         if self.waiting:
@@ -186,7 +197,6 @@ class SubprocVecEnv(VecEnv):
     def __del__(self):
         if not self.closed:
             self.close()
-
 
 def _flatten_obs(obs):
     assert isinstance(obs, (list, tuple))
