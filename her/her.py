@@ -20,7 +20,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, save_model=False, model_path=None,
-          nb_train_epoch=4, desired_x_pos=500, her=True, debug=False, threshold=(10, 20),
+          nb_train_epoch=4, desired_x_pos=500, debug=False, threshold=(10, 20),
           reduced_step=5, strategy='single', policy_inputs=['obs'], **network_kwargs):
 
     '''
@@ -89,6 +89,10 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     if sys.platform == "darwin":
         log_interval = 5
         replay_start = 10
+    if replay_k == 0.:
+        her = False
+    else:
+        her = True
 
     logger.info("Running Acer with following kwargs")
     logger.info(locals())

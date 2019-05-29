@@ -64,8 +64,7 @@ class ReplayBuffer:
                 reach_rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["desired_goal_infos"][None, :])
                 reach_rewards = reach_rewards.flatten()
                 reach_index = np.where(reach_rewards.astype(int))
-                error = np.sum(np.abs(cache[i]["rewards"][reach_index] - reach_rewards[reach_index]))
-                assert error < 1e-6, "error:{}".format(error)
+                assert np.array_equal(cache[i]["rewards"][reach_index], reach_rewards[reach_index])
                 if self.her:
                     cache[i]["desired_goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
                     cache[i]["desired_goal_state"][her_index] = cache[i]["next_obs"][future_index]
@@ -88,13 +87,10 @@ class ReplayBuffer:
             rewards = samples["rewards"]
             reach_rewards = self.reward_fn(samples["next_obs_infos"], samples["desired_goal_infos"])
             reach_index = np.where(reach_rewards.astype(int))
-            dead_index = np.where(rewards == -1.0)
-
             samples["dones"][reach_index] = True        # verified by Maze experiments
 
             new_rewards = np.copy(rewards)
             new_rewards[reach_index] = 1.0
-            new_rewards[dead_index] = -1.0
 
             samples["her_gain"] = np.mean(new_rewards) - np.mean(rewards)
             samples["rewards"] = new_rewards

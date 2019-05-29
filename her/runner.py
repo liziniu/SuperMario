@@ -111,29 +111,35 @@ class Runner:
             # achieved & episode done
             for e in range(self.nenv):
                 reached = self.check_goal_reached_v2(infos[e], self.desired_goal_info[e])
-                if reached:
+                if reached or self.episode_step[e] > self.curriculum.allow_step or infos[e]["x_pos"] > self.desired_goal_info[e]["x_pos"] + 100:
                     # log info
                     final_pos = {"x_pos": infos[e]["x_pos"], "y_pos": infos[e]["y_pos"]}
-                    self.recoder.store(dict(env=e, succ=True, length=self.episode_step[e], final_pos=final_pos))
-                    logger.info(self.TEMPLATE.format(e, 'succ', self.desired_goal_info[e], final_pos, self.episode_step[e]))
+                    if reached:
+                        succ = True
+                    else:
+                        succ = False
+                    self.recoder.store(dict(env=e, succ=succ, length=self.episode_step[e], final_pos=final_pos))
+                    logger.info(self.TEMPLATE.format(e, succ, self.desired_goal_info[e], final_pos, self.episode_step[e]))
 
                     # episode info
-                    episode_info.update({'succ': True, 'length': self.episode_step[e], 'final_pos': final_pos})
+                    episode_info.update({'succ': succ, 'length': self.episode_step[e], 'final_pos': final_pos})
                     self.episode_step[e] = 0
 
                     # reward and dones
-                    rewards[e] = 1.0
+                    if reached:
+                        rewards[e] = 1.0
                     dones[e] = True
 
                     # reset
                     if self.dict_obs:
                         _dict_obs = self.env.reset_v2(e)
                         obs[e], achieved_goal[e] = _dict_obs['observation'][0], np.tile(_dict_obs['achieved_goal'][0], self.nb_tile)
+                        assert np.array_equal(achieved_goal[e], np.tile(np.array([40., 176.]), self.nb_tile))
                     else:
                         _obs = self.env.reset_v2(e)[0]
                         obs[e] = _obs
                     # curriculum
-                    self.curriculum.update(succ=True, acer_steps=acer_steps)
+                    self.curriculum.update(succ=succ, acer_steps=acer_steps)
                     self.desired_goal[e], self.desired_goal_state[e], self.desired_goal_info[e] = self.curriculum.get_current_target(nb_goal=1)
                 elif dones[e]:
                     # log info
@@ -150,27 +156,6 @@ class Runner:
                         death[e] = True
                         if self.include_death:
                             rewards[e] = -1
-                    # curriculum
-                    self.curriculum.update(succ=False, acer_steps=acer_steps)
-                    self.desired_goal[e], self.desired_goal_state[e], self.desired_goal_info[e] = self.curriculum.get_current_target(nb_goal=1)
-                elif self.episode_step[e] > self.curriculum.allow_step or infos[e]["x_pos"] > self.desired_goal_info[e]["x_pos"] + 100:
-                    # log info
-                    final_pos = {"x_pos": infos[e]["x_pos"], "y_pos": infos[e]["y_pos"]}
-                    self.recoder.store(dict(env=e, succ=False, length=self.episode_step[e], final_pos=final_pos))
-                    logger.info(self.TEMPLATE.format(e, 'fail', self.desired_goal_info[e], final_pos, self.episode_step[e]))
-
-                    # episode info
-                    episode_info.update({'succ': False, 'length': self.episode_step[e], 'final_pos': final_pos})
-                    self.episode_step[e] = 0
-
-                    # reset
-                    dones[e] = True
-                    if self.dict_obs:
-                        _dict_obs = self.env.reset_v2(e)
-                        obs[e], achieved_goal[e] = _dict_obs['observation'][0], np.tile(_dict_obs['achieved_goal'][0], self.nb_tile)
-                    else:
-                        _obs = self.env.reset_v2(e)[0]
-                        obs[e] = _obs
                     # curriculum
                     self.curriculum.update(succ=False, acer_steps=acer_steps)
                     self.desired_goal[e], self.desired_goal_state[e], self.desired_goal_info[e] = self.curriculum.get_current_target(nb_goal=1)
@@ -197,7 +182,9 @@ class Runner:
 
         mb_next_obs_infos = np.asarray(mb_next_obs_infos, dtype=object).swapaxes(1, 0)
         mb_desired_goal_infos = np.asarray(mb_desired_goal_infos, dtype=object).swapaxes(1, 0)
-        assert np.array_equal(mb_rewards, self.reward_fn(mb_next_obs_infos, mb_desired_goal_infos))
+        if not np.array_equal(mb_rewards, self.reward_fn(mb_next_obs_infos, mb_desired_goal_infos)):
+            import ipdb
+            ipdb.set_trace()
 
         results = dict(
             obs=mb_obs,

@@ -11,7 +11,12 @@ def atari():
         nb_train_epoch=4,
         desired_x_pos=500,
         replay_start=1000,
-        policy_inputs=['obs', 'achieved_goal', 'desired_goal', 'desired_goal_state']
+        policy_inputs=[
+            'obs',
+            'achieved_goal',
+            'desired_goal',
+            'desired_goal_state'
+        ]
     )
 
 
