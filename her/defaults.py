@@ -11,10 +11,10 @@ def atari():
         nb_train_epoch=4,
         desired_x_pos=500,
         replay_start=1000,
-        goal_shape=(84, 84, 4)
+        policy_inputs=['obs', 'achieved_goal', 'desired_goal', 'desired_goal_state']
     )
 
 
 def get_store_keys():
-    return ["obs", "next_obs", "actions", "rewards", "mus", "dones",
-            "masks", "goal_obs", "goal_infos",  "next_obs_infos", "deaths"]
+    return ["obs", "next_obs", "achieved_goal", "next_achieved_goal", "desired_goal", "desired_goal_state",
+            "actions", "rewards", "mus", "dones", "deaths", "next_obs_infos", "desired_goal_infos"]

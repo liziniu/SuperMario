@@ -2,21 +2,11 @@ import threading
 import numpy as np
 import sys
 from acer.util import goal_to_embedding
-
-def check_reward_fn(next_obs, dones, maze_size):
-    nenv, nsteps = next_obs.shape[0], next_obs.shape[1]
-    rewards = np.empty([nenv, nsteps], dtype=np.float32)
-    for i in range(nenv):
-        for j in range(nsteps):
-            if np.array_equal(next_obs[i][j], np.array([0., 0.])) and dones[i][j]:
-                rewards[i][j] = 1.0
-            else:
-                rewards[i][j] = -0.1 / maze_size
-    return rewards
+from gym import spaces
 
 
 class ReplayBuffer:
-    def __init__(self, env, sample_goal_fn, reward_fn, nsteps, size, keys, her, goal_shape):
+    def __init__(self, env, sample_goal_fn, reward_fn, nsteps, size, keys, her):
         """Creates a replay buffer.
 
         Args:
@@ -30,10 +20,11 @@ class ReplayBuffer:
         self.sample_goal_fn = sample_goal_fn
         self.reward_fn = reward_fn
 
-        self.obs_dtype = env.observation_space.dtype
+        if isinstance(env.observation_space, spaces.Dict):
+            self.obs_dtype = env.observation_space.spaces['observation'].dtype
+        else:
+            self.obs_dtype = env.observation_space.dtype
         self.ac_dtype = env.action_space.dtype
-        self.goal_shape = goal_shape
-        self.goal_as_image = len(goal_shape) == 3
         # self.buffers is {key: array(size_in_episodes x T or T+1 x dim_key)}
         self.keys = keys
         # self._trajectory_buffer = Trajectory(nenv, keys)
@@ -50,7 +41,7 @@ class ReplayBuffer:
     def get(self, use_cache, downsample=True):
         """Returns a dict {key: array(batch_size x shapes[key])}
         """
-        samples = {key: [] for key in self.keys + ["_goal_infos", "_goal_obs"]}
+        samples = {key: [] for key in self.keys}
         samples["her_gain"] = 0.
         if not use_cache:
             cache = [{} for _ in range(self.nenv)]
@@ -65,27 +56,20 @@ class ReplayBuffer:
                 else:
                     start, end = 0, self.current_size
                 for key in self.keys:
-                    if key in ["masks"]:
-                        cache[i][key] = self.buffers[i][key][start*(self.nsteps+1):end*(self.nsteps+1)].copy()
-                    else:
-                        cache[i][key] = self.buffers[i][key][start*self.nsteps:end*self.nsteps].copy()
+                    cache[i][key] = self.buffers[i][key][start*self.nsteps:end*self.nsteps].copy()
             for i in range(self.nenv):
                 dones = cache[i]["dones"]
                 deaths = cache[i]["deaths"]
                 her_index, future_index = self.sample_goal_fn(dones, deaths)
-                reach_rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["goal_infos"][None, :])
+                reach_rewards = self.reward_fn(cache[i]["next_obs_infos"][None, :], cache[i]["desired_goal_infos"][None, :])
                 reach_rewards = reach_rewards.flatten()
                 reach_index = np.where(reach_rewards.astype(int))
                 error = np.sum(np.abs(cache[i]["rewards"][reach_index] - reach_rewards[reach_index]))
                 assert error < 1e-6, "error:{}".format(error)
-                cache[i]["_goal_infos"] = cache[i]["goal_infos"].copy()
-                cache[i]["_goal_obs"] = cache[i]["goal_obs"].copy()
                 if self.her:
-                    cache[i]["_goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
-                    if self.goal_as_image:
-                        cache[i]["_goal_obs"][her_index] = cache[i]["next_obs"][future_index]
-                    else:
-                        cache[i]["_goal_obs"][her_index] = goal_to_embedding(cache[i]["next_obs_infos"][future_index])
+                    cache[i]["desired_goal_infos"][her_index] = cache[i]["next_obs_infos"][future_index]
+                    cache[i]["desired_goal_state"][her_index] = cache[i]["next_obs"][future_index]
+                    cache[i]["desired_goal"][her_index] = cache[i]["next_achieved_goal"][future_index]
             self._cache = cache.copy()
         else:
             cache = self._cache.copy()
@@ -94,28 +78,23 @@ class ReplayBuffer:
             transitions = cache[i]
             real_size = len(transitions["obs"]) // self.nsteps
             index = np.random.randint(0, real_size)
-            for key in self.keys + ["_goal_infos", "_goal_obs"]:
-                if key in ["masks"]:
-                    start, end = index*(self.nsteps+1), (index+1)*(self.nsteps+1)
-                else:
-                    start, end = index*self.nsteps, (index+1)*self.nsteps
+            for key in self.keys:
+                start, end = index*self.nsteps, (index+1)*self.nsteps
                 samples[key].append(transitions[key][start:end])
 
-        for key in self.keys + ["_goal_infos", "_goal_obs"]:
+        for key in self.keys:
             samples[key] = np.asarray(samples[key])
         if self.her:
             rewards = samples["rewards"]
-            reach_rewards = self.reward_fn(samples["next_obs_infos"], samples["_goal_infos"])
+            reach_rewards = self.reward_fn(samples["next_obs_infos"], samples["desired_goal_infos"])
             reach_index = np.where(reach_rewards.astype(int))
             dead_index = np.where(rewards == -1.0)
 
             samples["dones"][reach_index] = True        # verified by Maze experiments
 
             new_rewards = np.copy(rewards)
-            if len(reach_index) > 0:
-                new_rewards[reach_index] = 1.0
-            if len(dead_index) > 0:
-                new_rewards[dead_index] = -1.0
+            new_rewards[reach_index] = 1.0
+            new_rewards[dead_index] = -1.0
 
             samples["her_gain"] = np.mean(new_rewards) - np.mean(rewards)
             samples["rewards"] = new_rewards
@@ -123,10 +102,6 @@ class ReplayBuffer:
                 import ipdb
                 ipdb.set_trace()
                 raise ValueError("her_gain:{} can't be less than 0.".format(samples["her_gain"]))
-            samples["goal_obs"] = samples["_goal_obs"]
-            samples["goal_infos"] = samples["_goal_infos"]
-            samples.pop("_goal_obs")
-            samples.pop("_goal_infos")
         return samples
 
     def put(self, episode_batch):
@@ -141,17 +116,10 @@ class ReplayBuffer:
             for key in self.keys:
                 x = episode_batch[key][i]
                 if self.buffers[i][key] is None:
-                    if key in ["masks"]:
-                        maxlen = self.size * (self.nsteps + 1)
-                    else:
-                        maxlen = self.size * self.nsteps
+                    maxlen = self.size * self.nsteps
                     self.buffers[i][key] = np.empty((maxlen, ) + x.shape[1:], dtype=x.dtype)
-                if key in ["masks"]:
-                    start, end = self.current_size*(self.nsteps+1), (self.current_size+1)*(self.nsteps+1)
-                    self.buffers[i][key][start:end] = x
-                else:
-                    start, end = self.current_size*self.nsteps, (self.current_size+1)*self.nsteps
-                    self.buffers[i][key][start:end] = x
+                start, end = self.current_size*self.nsteps, (self.current_size+1)*self.nsteps
+                self.buffers[i][key][start:end] = x
         self.current_size += 1
         self.current_size %= self.size
 

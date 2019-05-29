@@ -27,15 +27,14 @@ class Acer:
     def call(self, replay_start, nb_train_epoch):
         runner, model, buffer, steps = self.runner, self.model, self.buffer, self.steps
 
-        results = runner.run()
+        results = runner.run(acer_steps=self.steps)
         if buffer is not None:
             tstart = time.time()
             buffer.put(results)
             self.episode_stats.feed(time.time()-tstart, "put_time")
         self.record_episode_info(results["episode_info"])
-        obs, next_obs, actions, rewards, mus, dones, masks, goal_obs = self.adjust_shape(results)
-        names_ops, values_ops = model.train_policy(
-            obs, next_obs, actions, rewards, dones, mus, model.initial_state, masks, steps, goal_obs)
+        policy_train_inputs = self.adjust_shape(results)
+        names_ops, values_ops = model.train_policy(**policy_train_inputs)
         if buffer.has_atleast(replay_start):
             for i in range(nb_train_epoch):
                 if i == 0:
@@ -46,9 +45,9 @@ class Acer:
                     tstart = time.time()
                     results = buffer.get(use_cache=True)
                     self.episode_stats.feed(time.time()-tstart, "get_second")
-                obs, next_obs, actions, rewards, mus, dones, masks, goal_obs = self.adjust_shape(results)
-                names_ops, values_ops = model.train_policy(
-                    obs, next_obs, actions, rewards, dones, mus, model.initial_state, masks, steps, goal_obs)
+                policy_train_inputs = self.adjust_shape(results)
+                names_ops, values_ops = model.train_policy(**policy_train_inputs)
+                rewards = policy_train_inputs["rewards"]
                 self.episode_stats.feed(np.mean(rewards), "rewards")
                 self.episode_stats.feed(results["her_gain"], "her_gain")
 
@@ -62,18 +61,31 @@ class Acer:
     def adjust_shape(self, results):
         runner = self.runner
 
-        obs = results["obs"].copy()
-        next_obs = results["next_obs"].copy()
-        obs = obs.reshape((runner.nbatch, ) + runner.obs_shape)
-        next_obs = next_obs.reshape((runner.nbatch, ) + runner.obs_shape)
-
+        obs = results["obs"].reshape((runner.nbatch, ) + runner.obs_shape)
+        next_obs = results["next_obs"].reshape((runner.nbatch, ) + runner.obs_shape)
+        achieved_goal = results["achieved_goal"].reshape((runner.nbatch, ) + runner.achieved_goal_shape)
+        next_achieved_goal = results["next_achieved_goal"].reshape((runner.nbatch, ) + runner.achieved_goal_shape)
+        desired_goal = results["desired_goal"].reshape((runner.nbatch, ) + runner.desired_goal_shape)
+        desired_goal_state = results["desired_goal_state"].reshape((runner.nbatch, ) + runner.desired_goal_state_shape)
         actions = results["actions"].reshape(runner.nbatch)
         rewards = results["rewards"].reshape(runner.nbatch)
         mus = results["mus"].reshape([runner.nbatch, runner.nact])
         dones = results["dones"].reshape([runner.nbatch])
-        masks = results["masks"].reshape([runner.batch_ob_shape[0]])
-        goal_obs = results["goal_obs"].reshape((runner.nbatch, ) + runner.goal_shape)
-        return obs, next_obs, actions, rewards, mus, dones, masks, goal_obs
+
+        results = {
+            "obs": obs,
+            "next_obs": next_obs,
+            "achieved_goal": achieved_goal,
+            "next_achieved_goal": next_achieved_goal,
+            "desired_goal": desired_goal,
+            "desired_goal_state": desired_goal_state,
+            "actions": actions,
+            "rewards": rewards,
+            "mus": mus,
+            "dones": dones,
+            "steps": self.steps
+        }
+        return results
 
     def record_episode_info(self, episode_info):
         returns = episode_info.get("episode", None)
@@ -101,11 +113,3 @@ class Acer:
         for key in self.keys:
             logger.record_tabular(key, self.episode_stats.get_mean(key))
         logger.dump_tabular()
-
-
-def f_dist(current_pos, goal_pos):
-    dist = abs(float(current_pos["x_pos"]) - float(goal_pos["x_pos"])) + \
-           abs(float(current_pos["y_pos"]) - float(goal_pos["y_pos"]))
-    return dist
-
-vf_dist = np.vectorize(f_dist)

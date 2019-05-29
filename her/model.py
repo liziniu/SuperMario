@@ -9,7 +9,7 @@ from baselines.a2c.utils import get_by_index, check_shape, avg_norm, q_explained
 from common.util import gradient_add
 from baselines.common.mpi_running_mean_std import RunningMeanStd
 import numpy as np
-
+import gym.spaces
 
 # remove last step
 def strip(var, nenvs, nsteps, flat=False):
@@ -57,18 +57,10 @@ def q_retrace(R, D, q_i, v, rho_i, nenvs, nsteps, gamma):
 class Model(object):
     def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps, ent_coef, q_coef, gamma,
                  max_grad_norm, lr, rprop_alpha, rprop_epsilon, total_timesteps, lrschedule, c, trust_region,
-                 alpha, delta, scope, goal_shape, load_path, debug):
+                 alpha, delta, scope, load_path, debug, policy_inputs):
         self.sess = sess
         self.nenv = nenvs
-        self.goal_shape = goal_shape
-        self.goal_as_image = goal_as_image = len(goal_shape) == 3
-        if self.goal_as_image:
-            assert self.goal_shape == ob_space.shape
-        else:
-            pass
-            # logger.info("normalize goal using RunningMeanStd")
-            # with tf.variable_scope("RunningMeanStd", reuse=tf.AUTO_REUSE):
-            #     self.goal_rms = RunningMeanStd(epsilon=1e-4, shape=self.goal_shape)
+        self.policy_inputs = policy_inputs.copy()
 
         nact = ac_space.n
         nbatch = nenvs * nsteps
@@ -84,37 +76,71 @@ class Model(object):
 
             self.V_NEXT = tf.placeholder(tf.float32, [nbatch], name="value_next")  # (by lzn: we revise goal-conditioned next value)
 
-            step_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_ob")
-            if goal_as_image:
-                step_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs,) + ob_space.shape, "step_goal")
-                concat_on_latent, train_goal_encoded, step_goal_encoded = False, None, None
+            if isinstance(ob_space, gym.spaces.Dict):
+                self.obs_shape = ob_space.spaces['observation'].shape
+                self.obs_dtype = ob_space.spaces['observation'].dtype
             else:
-                step_goal_placeholder = tf.placeholder(tf.float32, (nenvs,) + goal_shape, "step_goal")
-                # step_goal_encoded = tf.clip_by_value(
-                #     (step_goal_placeholder - self.goal_rms.mean) / self.goal_rms.std,
-                #     -5., 5.)
-                step_goal_encoded = step_goal_placeholder
+                self.obs_shape = ob_space.shape
+                self.obs_dtype = ob_space.dtype
+            self.achieved_goal_sh = achieved_goal_sh = (256, )
+            self.desired_goal_sh = desired_goal_sh = (256, )
+            self.desired_goal_state_sh = desired_goal_state_sh = self.obs_shape
 
-            train_ob_placeholder = tf.placeholder(ob_space.dtype, (nenvs * nsteps,) + ob_space.shape, "train_ob")
-            if goal_as_image:
-                train_goal_placeholder = tf.placeholder(ob_space.dtype, (nenvs * nsteps,) + ob_space.shape,
-                                                        "train_goal")
-                concat_on_latent, train_goal_encoded = False, None
+            self.step_obs_tf = tf.placeholder(self.obs_dtype, (nenvs,) + self.obs_shape, 'step_obs')
+            self.step_achieved_goal_tf = tf.placeholder(tf.float32, (nenvs,) + achieved_goal_sh, 'step_achieved_goal')
+            self.step_desired_goal_tf = tf.placeholder(tf.float32, (nenvs, ) + desired_goal_sh, 'step_desired_goal')
+            self.step_desired_goal_state_tf = tf.placeholder(self.obs_dtype, (nenvs,) + desired_goal_state_sh, 'step_desired_goal_state')
+
+            self.train_obs_tf = tf.placeholder(self.obs_dtype, (nenvs * nsteps,) + self.obs_shape, 'train_obs')
+            self.train_achieved_goal_tf = tf.placeholder(tf.float32, (nenvs * nsteps,) + achieved_goal_sh, 'train_achieved_goal')
+            self.train_desired_goal_tf = tf.placeholder(tf.float32, (nenvs * nsteps,) + desired_goal_sh, 'train_desired_goal')
+            self.train_desired_goal_state_tf = tf.placeholder(self.obs_dtype, (nenvs * nsteps,) + desired_goal_state_sh, 'train_desired_goal_state')
+
+            # normalize embedding
+            normalizer = 2500
+            step_achieved_goal_tf = self.step_achieved_goal_tf/ normalizer
+            step_desired_goal_tf = self.step_desired_goal_tf / normalizer
+            train_achieved_goal_tf = self.train_achieved_goal_tf / normalizer
+            train_desired_goal_tf = self.train_desired_goal_tf / normalizer
+
+            step_obs_tf = self.step_obs_tf
+            step_desired_goal_state_tf = self.step_desired_goal_state_tf
+            train_obs_tf = self.train_obs_tf
+            train_desired_goal_state_tf = self.train_desired_goal_state_tf
+
+            assert 'obs' in policy_inputs
+            policy_inputs.remove('obs')
+            logger.info('policy_inputs:{}'.format(policy_inputs))
+            if 'desired_goal_state' in policy_inputs:
+                policy_inputs.remove('desired_goal_state')
+                step_state_tf = tf.concat([step_obs_tf, step_desired_goal_state_tf], axis=-1, name='step_state')
+                train_state_tf = tf.concat([train_obs_tf, train_desired_goal_state_tf], axis=-1, name='train_state')
             else:
-                train_goal_placeholder = tf.placeholder(tf.float32, (nenvs * nsteps,) + goal_shape,
-                                                        "train_goal")
-                concat_on_latent = True
-                # train_goal_encoded = tf.clip_by_value(
-                #     (train_goal_placeholder - self.goal_rms.mean) / self.goal_rms.std,
-                #     -5., 5.)
-                train_goal_encoded = train_goal_placeholder
-            self.step_model = policy(nbatch=nenvs, nsteps=1, observ_placeholder=step_ob_placeholder, sess=self.sess,
-                                     goal_placeholder=step_goal_placeholder, concat_on_latent=concat_on_latent,
-                                     goal_encoded=step_goal_encoded)
-            self.train_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                      sess=self.sess,
-                                      goal_placeholder=train_goal_placeholder, concat_on_latent=concat_on_latent,
-                                      goal_encoded=train_goal_encoded)
+                step_state_tf = step_obs_tf
+                train_state_tf = train_obs_tf
+
+            if 'achieved_goal' in policy_inputs and 'desired_goal' not in policy_inputs:
+                policy_inputs.remove('achieved_goal')
+                step_goal_tf = step_achieved_goal_tf
+                train_goal_tf = train_achieved_goal_tf
+            elif 'achieved_goal' not in policy_inputs and 'desired_goal' in policy_inputs:
+                policy_inputs.remove('desired_goal')
+                step_goal_tf = step_desired_goal_tf
+                train_goal_tf = train_desired_goal_tf
+            elif 'achieved_goal' in policy_inputs and 'desired_goal' in policy_inputs:
+                policy_inputs.remove('achieved_goal')
+                policy_inputs.remove('desired_goal')
+                step_goal_tf = tf.concat([step_achieved_goal_tf, step_desired_goal_tf], axis=-1, name='step_goal')
+                train_goal_tf = tf.concat([train_achieved_goal_tf, train_desired_goal_tf], axis=-1, name='train_goal')
+            else:
+                step_goal_tf, train_goal_tf = None, None
+            if len(policy_inputs) > 0:
+                raise ValueError("Unused policy inputs:{}".format(policy_inputs))
+
+            self.step_model = policy(nbatch=nenvs, nsteps=1, state_placeholder=step_state_tf, sess=self.sess,
+                                     goal_placeholder=step_goal_tf)
+            self.train_model = policy(nbatch=nbatch, nsteps=nsteps, state_placeholder=train_state_tf,
+                                      sess=self.sess, goal_placeholder=train_goal_tf)
 
         variables = find_trainable_variables
         self.params = params = variables(scope)
@@ -137,9 +163,8 @@ class Model(object):
         # print("========================== Ema =============================")
 
         with tf.variable_scope(scope, custom_getter=custom_getter, reuse=True):
-            self.polyak_model = policy(nbatch=nbatch, nsteps=nsteps, observ_placeholder=train_ob_placeholder,
-                                       goal_placeholder=train_goal_placeholder, sess=self.sess,
-                                       concat_on_latent=concat_on_latent, goal_encoded=train_goal_encoded)
+            self.polyak_model = policy(nbatch=nbatch, nsteps=nsteps, state_placeholder=train_state_tf,
+                                       goal_placeholder=train_goal_tf, sess=self.sess,)
 
         # Notation: (var) = batch variable, (var)s = seqeuence variable, (var)_i = variable index by action at step i
 
@@ -265,28 +290,17 @@ class Model(object):
         else:
             tf.global_variables_initializer().run(session=self.sess)
 
-    def train_policy(self, obs, next_obs, actions, rewards, dones, mus, states, masks, steps, goal_obs, verbose=False):
+    def train_policy(self, obs, next_obs, achieved_goal, next_achieved_goal, desired_goal, desired_goal_state,
+                     actions, rewards, mus, dones, steps):
+        verbose = False
+
         cur_lr = self.lr.value_steps(steps)
         # 1. calculate v_{t+1} using obs_{t+1} and g_t
-        td_map = {self.train_model.X: next_obs}
-        assert hasattr(self.train_model, "goals")
-        td_map[self.train_model.goals] = goal_obs
+        td_map = self._feed_train_policy_inputs(next_obs, next_achieved_goal, desired_goal, desired_goal_state)
         v_next = self.sess.run(self.v, feed_dict=td_map)
         # 2. use obs_t, goal_t, v_{t+1} to train policy
-        td_map = {self.train_model.X: obs, self.polyak_model.X: obs, self.A: actions, self.R: rewards, self.D: dones,
-                  self.MU: mus, self.LR: cur_lr, self.V_NEXT: v_next}
-
-        assert hasattr(self.train_model, "goals")
-        assert hasattr(self.polyak_model, "goals")
-        if hasattr(self, "goal_rms"):
-            self.goal_rms.update(goal_obs)
-        td_map[self.train_model.goals] = goal_obs
-        td_map[self.polyak_model.goals] = goal_obs
-        if states is not None:
-            td_map[self.train_model.S] = states
-            td_map[self.train_model.M] = masks
-            td_map[self.polyak_model.S] = states
-            td_map[self.polyak_model.M] = masks
+        td_map.update({self.train_obs_tf: obs, self.train_achieved_goal_tf: achieved_goal, self.A: actions,
+                       self.R: rewards, self.D: dones, self.MU: mus, self.LR: cur_lr, self.V_NEXT: v_next})
         if verbose:
             names_ops_policy = self.names_ops_policy.copy()
             values_ops_policy = self.sess.run(self.run_ops_policy, td_map)[1:]  # strip off _train
@@ -296,6 +310,30 @@ class Model(object):
 
         return names_ops_policy, values_ops_policy
 
-    def step(self, observation, **kwargs):
-        return self.step_model.evaluate([self.step_model.action, self.step_model_p, self.step_model.state],
-                                        observation, **kwargs)
+    def step(self, inputs):
+        td_map = self._feed_step_policy_inputs(**inputs)
+        return self.sess.run([self.step_model.action, self.step_model_p], feed_dict=td_map)
+
+    def _feed_train_policy_inputs(self, obs, achieved_goal, desired_goal, desired_goal_state):
+        td_map = dict()
+        assert 'obs' in self.policy_inputs
+        td_map[self.train_obs_tf] = obs
+        if 'achieved_goal' in self.policy_inputs:
+            td_map[self.train_achieved_goal_tf] = achieved_goal
+        if 'desired_goal' in self.policy_inputs:
+            td_map[self.train_desired_goal_tf] = desired_goal
+        if 'desired_goal_state' in self.policy_inputs:
+            td_map[self.train_desired_goal_state_tf] = desired_goal_state
+        return td_map
+
+    def _feed_step_policy_inputs(self, obs, achieved_goal=None, desired_goal=None, desired_goal_state=None):
+        td_map = dict()
+        assert 'obs' in self.policy_inputs
+        td_map[self.step_obs_tf] = obs
+        if 'achieved_goal' in self.policy_inputs:
+            td_map[self.step_achieved_goal_tf] = achieved_goal
+        if 'desired_goal' in self.policy_inputs:
+            td_map[self.step_desired_goal_tf] = desired_goal
+        if 'desired_goal_state' in self.policy_inputs:
+            td_map[self.step_desired_goal_state_tf] = desired_goal_state
+        return td_map

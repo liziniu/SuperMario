@@ -2,25 +2,26 @@ import time
 import numpy as np
 from baselines import logger
 from baselines.common import set_global_seeds
-from acer.policies import build_policy
+from her.policies import build_policy
 from common.env_util import VecFrameStack
 from her.buffer import ReplayBuffer
 from her.runner import Runner
 from her.her_sample import make_sample_her_transitions
 from her.model import Model
-from her.util import Acer, vf_dist
+from her.util import Acer
+from her.curriculum import Curriculum
 import sys
 from baselines.common.tf_util import get_session
 import os
-from her.defaults import get_store_keys, THRESHOLD
+from her.defaults import get_store_keys
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
           max_grad_norm=10, lr=7e-4, lrschedule='linear', rprop_epsilon=1e-5, rprop_alpha=0.99, gamma=0.99,
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, save_model=False, model_path=None,
-          goal_shape=(84, 84, 4), nb_train_epoch=4, desired_x_pos=None, her=True, debug=False, threshold=(10, 20),
-          reduced_step=5, strategy='simple', **network_kwargs):
+          nb_train_epoch=4, desired_x_pos=500, her=True, debug=False, threshold=(10, 20),
+          reduced_step=5, strategy='single', policy_inputs=['obs'], **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -112,7 +113,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         sess=sess, policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef,
         q_coef=q_coef, gamma=gamma, max_grad_norm=max_grad_norm, lr=lr, rprop_alpha=rprop_alpha,
         rprop_epsilon=rprop_epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule, c=c,
-        trust_region=trust_region, alpha=alpha, delta=delta, scope="her", goal_shape=goal_shape,
+        trust_region=trust_region, alpha=alpha, delta=delta, scope="her", policy_inputs=policy_inputs,
         debug=debug, load_path=model_path)
 
     def f(current_pos, goal_pos):
@@ -128,8 +129,10 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
         return stats.astype(float)
 
     # we still need two runner to avoid one reset others' envs.
-    runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, load_path=load_path,
-                    desired_x_pos=desired_x_pos, threshold=threshold, strategy=strategy)
+    goal_dim = model.achieved_goal_sh[0]
+    curriculum = Curriculum(load_path=load_path, strategy=strategy, desired_x_pos=desired_x_pos, model=model)
+    runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, curriculum=curriculum,
+                    threshold=threshold)
 
     if replay_ratio > 0:
         if her:
@@ -145,7 +148,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
             sample_goal_fn = dummpy_sample()
         assert env.num_envs == env_eval.num_envs
         buffer = ReplayBuffer(env=env, sample_goal_fn=sample_goal_fn, nsteps=nsteps, size=buffer_size,
-                              keys=get_store_keys(), reward_fn=reward_fn, her=her, goal_shape=goal_shape)
+                              keys=get_store_keys(), reward_fn=reward_fn, her=her)
     else:
         buffer = None
     acer = Acer(runner, model, buffer, log_interval,)
@@ -155,7 +158,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     onpolicy_cnt = 0
     if debug:
         while True:
-            runner.run(debug=False)
+            runner.run(0)
     while acer.steps < total_timesteps:
         acer.call(replay_start=replay_start, nb_train_epoch=nb_train_epoch)
         acer.steps += nenvs * nsteps
