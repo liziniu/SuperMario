@@ -82,10 +82,12 @@ def build_env(env_id, num_env, alg, reward_scale=1.0, env_type=None, gamestate=N
             env = make_env(env_id, env_type, prefix=prefix, seed=seed)
         else:
             frame_stack_size = 4
+            flatten_dict_observations = True
             if "SuperMarioBros" in env_id:
+                flatten_dict_observations = False
                 wrapper_kwargs = {"episode_life": False}
             env = make_vec_env(env_id, env_type, nenv, seed, gamestate=gamestate, reward_scale=reward_scale,
-                               prefix=prefix, wrapper_kwargs=wrapper_kwargs)
+                               prefix=prefix, wrapper_kwargs=wrapper_kwargs, flatten_dict_observations=flatten_dict_observations)
             env = VecFrameStack(env, frame_stack_size)
 
     else:
@@ -238,15 +240,28 @@ class VecFrameStack(VecEnvWrapper):
     def __init__(self, venv, nstack):
         self.venv = venv
         self.nstack = nstack
-        wos = venv.observation_space  # wrapped ob space
+        self.dict_obs = False
+        if isinstance(venv.observation_space, gym.spaces.Dict):
+            wos = venv.observation_space.spaces['observation']
+            self.dict_obs = True
+        else:
+            wos = venv.observation_space  # wrapped ob space
         low = np.repeat(wos.low, self.nstack, axis=-1)
         high = np.repeat(wos.high, self.nstack, axis=-1)
         self.stackedobs = np.zeros((venv.num_envs,) + low.shape, low.dtype)
         observation_space = spaces.Box(low=low, high=high, dtype=venv.observation_space.dtype)
+        if self.dict_obs:
+            _observation_space = venv.observation_space
+            _observation_space.spaces['observation'] = observation_space
+            observation_space = _observation_space
         VecEnvWrapper.__init__(self, venv, observation_space=observation_space)
 
     def step_wait(self):
-        obs, rews, news, infos = self.venv.step_wait()
+        if self.dict_obs:
+            dict_obs, rews, news, infos = self.venv.step_wait()
+            obs = dict_obs['observation']
+        else:
+            obs, rews, news, infos = self.venv.step_wait()
         self.stackedobs = np.roll(self.stackedobs, shift=-1, axis=-1)
         for (i, new) in enumerate(news):
             if new:
@@ -256,13 +271,42 @@ class VecFrameStack(VecEnvWrapper):
                 else:
                     self.stackedobs[i, ..., :-obs.shape[-1]] = obs[i]
         self.stackedobs[..., -obs.shape[-1]:] = obs
-        return self.stackedobs, rews, news, infos
+        if self.dict_obs:
+            dict_obs['observation'] = self.stackedobs
+            return dict_obs, rews, news, infos
+        else:
+            return self.stackedobs, rews, news, infos
 
-    def reset(self):
-        obs = self.venv.reset()
+    def reset(self, **kwargs):
         self.stackedobs[...] = 0
+        if self.dict_obs:
+            dict_obs = self.venv.reset(**kwargs)
+            obs = dict_obs['observation']
+        else:
+            obs = self.venv.reset(**kwargs)
         if obs.shape == self.stackedobs.shape:
             self.stackedobs = obs
         else:
             self.stackedobs[..., -self.nstack:] = obs
-        return self.stackedobs
+        if self.dict_obs:
+            dict_obs['observation'] = self.stackedobs
+            return dict_obs
+        else:
+            return self.stackedobs
+
+    def reset_v2(self, e, **kwargs):
+        if self.dict_obs:
+            dict_obs = self.venv.reset_v2(e, **kwargs)
+            obs = dict_obs['observation'][0]
+        else:
+            obs = self.venv.reset_v2(e, **kwargs)[0]
+        self.stackedobs[e, :] = 0
+        if obs.shape == self.stackedobs[e].shape:
+            self.stackedobs[e] = obs
+        else:
+            self.stackedobs[e, ..., -self.nstack:] = obs
+        if self.dict_obs:
+            dict_obs['observation'] = [self.stackedobs[e]]
+            return dict_obs
+        else:
+            return [self.stackedobs[e]]

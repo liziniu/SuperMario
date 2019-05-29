@@ -2,6 +2,7 @@ import numpy as np
 from baselines.common.vec_env.util import copy_obs_dict, dict_to_obs, obs_space_info
 import multiprocessing as mp
 from baselines.common.vec_env.vec_env import VecEnv, CloudpickleWrapper, clear_mpi_env_vars
+from gym.spaces.dict_space import Dict
 
 
 class DummyVecEnv(VecEnv):
@@ -27,6 +28,7 @@ class DummyVecEnv(VecEnv):
         self.buf_dones = np.zeros((self.num_envs,), dtype=np.bool)
         self.buf_rews  = np.zeros((self.num_envs,), dtype=np.float32)
         self.buf_infos = [{} for _ in range(self.num_envs)]
+        self.buf_reset_info = [{} for _ in range(self.num_envs)]
         self.actions = None
         self.spec = self.envs[0].spec
 
@@ -58,17 +60,14 @@ class DummyVecEnv(VecEnv):
         return (self._obs_from_buf(), np.copy(self.buf_rews), np.copy(self.buf_dones),
                 self.buf_infos.copy())
 
-    def reset(self):
+    def reset(self, **kwargs):
         for e in range(self.num_envs):
-            obs = self.envs[e].reset()
+            obs = self.envs[e].reset(**kwargs)
             self._save_obs(e, obs)
         return self._obs_from_buf()
 
-    def reset_v2(self, env_idx):
-        for e in range(self.num_envs):
-            obs = self.envs[e].reset()
-            self._save_obs(e, obs)
-        return self._obs_from_buf()
+    def reset_v2(self, *args, **kwargs):
+        return self.reset(**kwargs)
 
     def _save_obs(self, e, obs):
         for k in self.keys:
@@ -99,8 +98,8 @@ def worker(remote, parent_remote, env_fn_wrapper):
             if cmd == 'step':
                 ob, reward, done, info = env.step(data)
                 if done:
-                    ob = env.reset()
                     info['next_obs'] = ob
+                    ob = env.reset()
                 remote.send((ob, reward, done, info))
             elif cmd == 'reset':
                 ob = env.reset()
@@ -169,10 +168,11 @@ class SubprocVecEnv(VecEnv):
             remote.send(('reset', None))
         return _flatten_obs([remote.recv() for remote in self.remotes])
 
-    def reset_v2(self, env_idx):
+    def reset_v2(self, e):
         self._assert_not_closed()
-        self.remotes[env_idx].send(('reset', None))
-        return _flatten_obs([self.remotes[env_idx].recv()])
+        self.remotes[e].send(('reset', None))
+        obs = [self.remotes[e].recv()]
+        return _flatten_obs(obs)
 
     def close_extras(self):
         self.closed = True

@@ -106,7 +106,12 @@ class MaxAndSkipEnv(gym.Wrapper):
         """Return only every `skip`-th frame"""
         gym.Wrapper.__init__(self, env)
         # most recent raw observations (for max pooling across time steps)
-        self._obs_buffer = np.zeros((2,)+env.observation_space.shape, dtype=np.uint8)
+        self.dict_obs = isinstance(env.observation_space, gym.spaces.Dict)
+        if self.dict_obs:
+            obs_shape = env.observation_space.spaces['observation'].shape
+        else:
+            obs_shape = env.observation_space.shape
+        self._obs_buffer = np.zeros((2,)+obs_shape, dtype=np.uint8)
         self._skip       = skip
 
     def step(self, action):
@@ -115,6 +120,9 @@ class MaxAndSkipEnv(gym.Wrapper):
         done = None
         for i in range(self._skip):
             obs, reward, done, info = self.env.step(action)
+            if self.dict_obs:
+                dict_obs = obs.copy()
+                obs = dict_obs.pop('observation')
             if i == self._skip - 2: self._obs_buffer[0] = obs
             if i == self._skip - 1: self._obs_buffer[1] = obs
             total_reward += reward
@@ -123,8 +131,11 @@ class MaxAndSkipEnv(gym.Wrapper):
         # Note that the observation on the done=True frame
         # doesn't matter
         max_frame = self._obs_buffer.max(axis=0)
-
-        return max_frame, total_reward, done, info
+        if self.dict_obs:
+            dict_obs['observation'] = max_frame
+            return dict_obs, total_reward, done, info
+        else:
+            return max_frame, total_reward, done, info
 
     def reset(self, **kwargs):
         return self.env.reset(**kwargs)
@@ -145,19 +156,32 @@ class WarpFrame(gym.ObservationWrapper):
         self.height = height
         self.grayscale = grayscale
         if self.grayscale:
-            self.observation_space = spaces.Box(low=0, high=255,
-                shape=(self.height, self.width, 1), dtype=np.uint8)
+            observation_space = spaces.Box(low=0, high=255, shape=(self.height, self.width, 1), dtype=np.uint8)
         else:
-            self.observation_space = spaces.Box(low=0, high=255,
-                shape=(self.height, self.width, 3), dtype=np.uint8)
+            observation_space = spaces.Box(low=0, high=255, shape=(self.height, self.width, 3), dtype=np.uint8)
+        self.dict_obs = False
+        if isinstance(env.observation_space, gym.spaces.Dict):
+            self.observation_space = env.observation_space
+            self.observation_space.spaces['observation'] = observation_space
+            self.dict_obs = True
+        else:
+            self.observation_space = observation_space
 
     def observation(self, frame):
+        if self.dict_obs:
+            dict_obs = frame
+            frame = dict_obs.pop("observation")
         if self.grayscale:
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
         if self.grayscale:
             frame = np.expand_dims(frame, -1)
-        return frame
+        if self.dict_obs:
+            dict_obs['observation'] = frame
+            return dict_obs
+        else:
+            return frame
+
 
 class FrameStack(gym.Wrapper):
     def __init__(self, env, k):
@@ -172,8 +196,18 @@ class FrameStack(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         self.k = k
         self.frames = deque([], maxlen=k)
-        shp = env.observation_space.shape
-        self.observation_space = spaces.Box(low=0, high=255, shape=(shp[:-1] + (shp[-1] * k,)), dtype=env.observation_space.dtype)
+        if isinstance(env.observation_space, gym.spaces.Dict):
+            shp = env.observation_space.spaces['observation'].shape
+            obs_dtype = env.observation_space.spaces['observation'].dtype
+        else:
+            shp = env.observation_space.shape
+            obs_dtype = env.observation_space.dtype
+        observation_space = spaces.Box(low=0, high=255, shape=(shp[:-1] + (shp[-1] * k,)), dtype=obs_dtype)
+        if isinstance(env.observation_space, gym.spaces.Dict):
+            self.observation_space = env.observation_space
+            self.observation_space.spaces['observation'] = observation_space
+        else:
+            self.observation_space = observation_space
 
     def reset(self):
         ob = self.env.reset()
@@ -189,6 +223,7 @@ class FrameStack(gym.Wrapper):
     def _get_ob(self):
         assert len(self.frames) == self.k
         return LazyFrames(list(self.frames))
+
 
 class ScaledFloatFrame(gym.ObservationWrapper):
     def __init__(self, env):
