@@ -6,10 +6,13 @@ from baselines.a2c.utils import batch_to_seq, seq_to_batch
 from baselines.a2c.utils import cat_entropy_softmax
 from baselines.a2c.utils import Scheduler, find_trainable_variables
 from baselines.a2c.utils import get_by_index, check_shape, avg_norm, q_explained_variance
+from baselines.her.normalizer import Normalizer
 from common.util import gradient_add
 from baselines.common.mpi_running_mean_std import RunningMeanStd
 import numpy as np
 import gym.spaces
+from her.defaults import ACHIEVED_GOAL_SHAPE, DESIRED_GOAL_SHAPE
+
 
 # remove last step
 def strip(var, nenvs, nsteps, flat=False):
@@ -82,8 +85,8 @@ class Model(object):
             else:
                 self.obs_shape = ob_space.shape
                 self.obs_dtype = ob_space.dtype
-            self.achieved_goal_sh = achieved_goal_sh = (256, )
-            self.desired_goal_sh = desired_goal_sh = (256, )
+            self.achieved_goal_sh = achieved_goal_sh = ACHIEVED_GOAL_SHAPE
+            self.desired_goal_sh = desired_goal_sh = DESIRED_GOAL_SHAPE
             self.desired_goal_state_sh = desired_goal_state_sh = self.obs_shape
 
             self.step_obs_tf = tf.placeholder(self.obs_dtype, (nenvs,) + self.obs_shape, 'step_obs')
@@ -98,7 +101,7 @@ class Model(object):
 
             # normalize embedding
             normalizer = 2500
-            step_achieved_goal_tf = self.step_achieved_goal_tf/ normalizer
+            step_achieved_goal_tf = self.step_achieved_goal_tf / normalizer
             step_desired_goal_tf = self.step_desired_goal_tf / normalizer
             train_achieved_goal_tf = self.train_achieved_goal_tf / normalizer
             train_desired_goal_tf = self.train_desired_goal_tf / normalizer
@@ -109,8 +112,11 @@ class Model(object):
             train_desired_goal_state_tf = self.train_desired_goal_state_tf
 
             assert 'obs' in policy_inputs
-            policy_inputs.remove('obs')
             logger.info('policy_inputs:{}'.format(policy_inputs))
+            logger.info('achieved_goal_sh:{}'.format(self.achieved_goal_sh))
+            logger.info('desired_goal_sh:{}'.format(self.desired_goal_sh))
+            logger.info('normalizer:{}'.format(normalizer))
+            policy_inputs.remove('obs')
             if 'desired_goal_state' in policy_inputs:
                 policy_inputs.remove('desired_goal_state')
                 step_state_tf = tf.concat([step_obs_tf, step_desired_goal_state_tf], axis=-1, name='step_state')
@@ -140,7 +146,7 @@ class Model(object):
             self.step_model = policy(nbatch=nenvs, nsteps=1, state_placeholder=step_state_tf, sess=self.sess,
                                      goal_placeholder=step_goal_tf)
             self.train_model = policy(nbatch=nbatch, nsteps=nsteps, state_placeholder=train_state_tf,
-                                      sess=self.sess, goal_placeholder=train_goal_tf)
+                                      sess=self.sess, goal_placeholder=train_goal_tf, summary_stats=True)
 
         variables = find_trainable_variables
         self.params = params = variables(scope)
@@ -284,6 +290,11 @@ class Model(object):
         self.save = functools.partial(save_variables, sess=self.sess, variables=params)
 
         self.initial_state = self.step_model.initial_state
+        with tf.variable_scope('stats'):
+            with tf.variable_scope('achieved_goal'):
+                self.ag_stats = Normalizer(size=self.achieved_goal_sh[0], sess=self.sess)
+            with tf.variable_scope('desired_goal'):
+                self.g_stats = Normalizer(size=self.desired_goal_sh[0], sess=self.sess)
         if debug:
             tf.global_variables_initializer().run(session=self.sess)
             load_variables(load_path, self.params, self.sess)
@@ -293,7 +304,6 @@ class Model(object):
     def train_policy(self, obs, next_obs, achieved_goal, next_achieved_goal, desired_goal, desired_goal_state,
                      actions, rewards, mus, dones, steps):
         verbose = False
-
         cur_lr = self.lr.value_steps(steps)
         # 1. calculate v_{t+1} using obs_{t+1} and g_t
         td_map = self._feed_train_policy_inputs(next_obs, next_achieved_goal, desired_goal, desired_goal_state)
@@ -307,6 +317,19 @@ class Model(object):
         else:
             names_ops_policy = self.names_ops_policy.copy()[:8]  # not including trust region
             values_ops_policy = self.sess.run(self.run_ops_policy, td_map)[1:][:8]
+        debug = False
+        if debug:
+            if np.random.uniform() < 0.25:
+                if 'achieved_goal' in self.policy_inputs:
+                    self.ag_stats.update(achieved_goal)
+                    self.ag_stats.recompute_stats()
+                    names_ops_policy += ['achieved_goal']
+                    values_ops_policy += [np.mean(self.sess.run(self.ag_stats.mean))]
+                if 'desired_goal' in self.policy_inputs:
+                    self.g_stats.update(desired_goal)
+                    self.g_stats.recompute_stats()
+                    names_ops_policy += ['desired_goal']
+                    values_ops_policy += [np.mean(self.sess.run(self.g_stats.mean))]
 
         return names_ops_policy, values_ops_policy
 

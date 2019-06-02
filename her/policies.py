@@ -70,7 +70,17 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
         network_type = policy_network
         policy_network = get_network_builder(network_type)(**policy_kwargs)
 
-    def policy_fn(nbatch=None, nsteps=None, sess=None, state_placeholder=None, goal_placeholder=None):
+    def variable_summaries(var, scope):
+        mean = tf.reduce_mean(var)
+        std = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+        with tf.name_scope('summaries/' + scope):
+            tf.summary.scalar('mean', mean)
+            tf.summary.scalar('std', std)
+            tf.summary.scalar('max', tf.reduce_max(var))
+            tf.summary.scalar('min', tf.reduce_min(var))
+            # tf.summary.histogram('histogram', var)
+
+    def policy_fn(nbatch=None, nsteps=None, sess=None, state_placeholder=None, goal_placeholder=None, summary_stats=False):
         assert state_placeholder is not None
         X = state_placeholder
         extra_tensors = {}
@@ -86,8 +96,6 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
         with tf.variable_scope('pi', reuse=tf.AUTO_REUSE):
             policy_latent = policy_network(encoded_x)
             if goal_placeholder is not None:
-                assert policy_latent.get_shape().as_list()[:-1] == policy_latent.get_shape().as_list()[:-1]
-                policy_latent = tf.concat([policy_latent, goal_placeholder], axis=-1, name="concat_latent")
                 logger.info("concat obs and goals on latent")
                 addition_layers = True
                 if addition_layers:
@@ -98,6 +106,10 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
                     b = tf.get_variable("addition_fc_b", [nh], initializer=tf.constant_initializer(0.))
                     policy_latent = activ(tf.matmul(policy_latent, w) + b)
                     logger.info('additional mlp on policy latent')
+                if summary_stats:
+                    variable_summaries(policy_latent, 'policy_latent')
+                    variable_summaries(goal_placeholder, 'goal_placeholder')
+                policy_latent = tf.concat([policy_latent, goal_placeholder], axis=-1, name="concat_latent")
             if isinstance(policy_latent, tuple):
                 policy_latent, recurrent_tensors = policy_latent
 

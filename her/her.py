@@ -13,7 +13,8 @@ from her.curriculum import Curriculum
 import sys
 from baselines.common.tf_util import get_session
 import os
-from her.defaults import get_store_keys
+from her.defaults import get_store_keys, parse_policy_inputs
+import json
 
 
 def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=0.5, ent_coef=0.01,
@@ -21,7 +22,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, save_model=False, model_path=None,
           nb_train_epoch=4, desired_x_pos=500, debug=False, threshold=(10, 20),
-          reduced_step=5, strategy='single', policy_inputs=['obs'], **network_kwargs):
+          reduced_step=5, strategy='single', policy_inputs=1, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -87,16 +88,23 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
 
     '''
     if sys.platform == "darwin":
-        log_interval = 5
-        replay_start = 10
+        log_interval = 20
+        replay_start = 1000
     if replay_k == 0.:
         her = False
     else:
         her = True
+    policy_inputs = parse_policy_inputs(policy_inputs)
 
     logger.info("Running Acer with following kwargs")
     logger.info(locals())
     logger.info("\n")
+    with open(os.path.join(logger.get_dir(), 'params.json'), 'w') as f:
+        params = locals().copy()
+        params.pop('env')
+        params.pop('env_eval')
+        params.pop('f')
+        json.dump(params, f, indent=4)
 
     set_global_seeds(seed)
     if not isinstance(env, VecFrameStack):

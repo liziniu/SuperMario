@@ -59,6 +59,7 @@ class Runner:
         self.desired_goal[:], self.desired_goal_state[:], self.desired_goal_info[:] = self.curriculum.get_current_target(nb_goal=self.nenv)
 
         self.recoder = DataRecorder(os.path.join(logger.get_dir(), "runner_data"))
+        self.wrong_recorder = DataRecorder(os.path.join(logger.get_dir(), "wrong_data"))
         self.episode_step = np.zeros(self.nenv, dtype=np.int32)
         self.reward_fn = reward_fn
         self.threshold = threshold
@@ -91,6 +92,9 @@ class Runner:
             rewards = np.zeros(self.nenv, np.float32)
             death = np.array([False for _ in range(self.nenv)], dtype=np.bool)
             self.episode_step += 1
+            for e in range(self.nenv):
+                if infos[e]['x_pos'] == 65535:
+                    infos[e]['x_pos'] = 0
 
             # get real next obs and achieved goal
             next_obs = obs.copy()
@@ -107,6 +111,16 @@ class Runner:
             mb_next_obs.append(next_obs)
             mb_next_obs_infos.append(infos)
             mb_next_achieved_goal.append(next_achieved_goal)
+
+            # detecting wrong x_pos:
+            for e in range(self.nenv):
+                x_pos = infos[e].get('x_pos')
+                if x_pos > 3000:
+                    logger.info('detected a wrong x_pos:{}'.format(x_pos))
+                    data = {'obs': self.obs[e], 'next_obs': obs[e], 'action': actions[e], 'info': infos[e],
+                            'episode_step': self.episode_step[e], 'true_next_obs': next_obs[e], 'acer_step': acer_steps}
+                    self.wrong_recorder.store(data)
+                    self.wrong_recorder.dump()
 
             # achieved & episode done
             for e in range(self.nenv):
@@ -185,7 +199,6 @@ class Runner:
         if not np.array_equal(mb_rewards, self.reward_fn(mb_next_obs_infos, mb_desired_goal_infos)):
             import ipdb
             ipdb.set_trace()
-
         results = dict(
             obs=mb_obs,
             next_obs=mb_next_obs,

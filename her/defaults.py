@@ -2,6 +2,30 @@
 
 THRESHOLD = 6
 
+ACHIEVED_GOAL_SHAPE = (16, )
+DESIRED_GOAL_SHAPE = (16, )
+
+
+def parse_policy_inputs(mode):
+    if isinstance(mode, str):
+        mode = int(mode)
+    if mode == 1:
+        return ['obs']
+    elif mode == 2:
+        return ['obs', 'desired_goal']
+    elif mode == 3:
+        return ['obs', 'desired_goal_state']
+    elif mode == 4:
+        return ['obs', 'desired_goal', 'achieved_goal']
+    elif mode == 5:
+        return ['obs', 'desired_goal_state', 'achieved_goal']
+    elif mode == 6:
+        return ['obs', 'desired_goal', 'achieved_goal', 'desired_goal_state']
+    elif mode == 7:
+        return ['obs', 'desired_goal_state', 'desired_goal']
+    else:
+        raise NotImplementedError
+
 
 def atari():
     return dict(
@@ -11,12 +35,6 @@ def atari():
         nb_train_epoch=4,
         desired_x_pos=500,
         replay_start=1000,
-        policy_inputs=[
-            'obs',
-            'achieved_goal',
-            'desired_goal',
-            'desired_goal_state'
-        ]
     )
 
 
