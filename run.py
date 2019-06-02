@@ -1,6 +1,7 @@
 import datetime
 import multiprocessing
 import os.path as osp
+import os
 import re
 import sys
 from collections import defaultdict
@@ -10,12 +11,13 @@ import numpy as np
 from baselines import logger
 from baselines.common.tf_util import get_session
 from baselines.common.vec_env import VecFrameStack, VecNormalize, VecEnv
-from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
 from curiosity.dynamics import DummyDynamics, Dynamics
+from common.vec_video_recorder import VecVideoRecorder
 from common.cmd_util import common_arg_parser, parse_unknown_args
 from acer.util import parse_acer_mode
 from common.env_util import build_env
 import gym_maze
+import ipdb
 try:
     from mpi4py import MPI
 except ImportError:
@@ -175,13 +177,7 @@ def parse_cmdline_kwargs(args):
     return {k: parse(v) for k,v in parse_unknown_args(args).items()}
 
 
-def main(args):
-    # configure logger, disable logging in child MPI processes (with rank > 0)
-
-    arg_parser = common_arg_parser()
-    args, unknown_args = arg_parser.parse_known_args(args)
-    extra_args = parse_cmdline_kwargs(unknown_args)
-
+def main(args, extra_args):
     import os
     import shutil
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -231,5 +227,42 @@ def main(args):
     return model
 
 if __name__ == '__main__':
-    main(sys.argv)
+    from multiprocessing import Process
+    from copy import deepcopy
+    list_p = []
+    args = sys.argv
+    arg_parser = common_arg_parser()
+    logger.info('parent pid:{}'.format(os.getpid()))
+    args, unknown_args = arg_parser.parse_known_args(args)
+    extra_args = parse_cmdline_kwargs(unknown_args)
+    for i in range(args.num_exp):
+        arg_i = deepcopy(args)
+        arg_i.seed = args.seed + i
+        p = Process(target=main, args=(arg_i, extra_args))
+        list_p.append(p)
+    try:
+        for i, p in enumerate(list_p):
+            p.start()
+            print("Process:{} start".format(i))
+        for i, p in enumerate(list_p):
+            p.join()
+            list_p.remove(p)
+            print("Process:{} join".format(i))
+    except (Exception, KeyboardInterrupt):
+        print('\033[1;33;44m ChildProcess will terminate! Do not press or leave!\033[0m')
+        for i, p in enumerate(list_p):
+            p.terminate()
+            list_p.remove(p)
+            print("Process:{} terminate".format(i))
+        print('\033[1;33;44m You can leave now!\033[0m')
+    finally:
+        for p in list_p:
+            p.terminate()
+
+    # list_p = []
+    # args = sys.argv
+    # arg_parser = common_arg_parser()
+    # args, unknown_args = arg_parser.parse_known_args(args)
+    # extra_args = parse_cmdline_kwargs(unknown_args)
+    # main(args, extra_args)
 
