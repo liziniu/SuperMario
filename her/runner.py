@@ -4,6 +4,8 @@ from gym import spaces
 from baselines import logger
 from common.util import DataRecorder
 import os
+from collections import deque
+import time
 
 
 def goal_info_to_embedding(goal_infos, goal_dim):
@@ -58,22 +60,34 @@ class Runner:
         self.curriculum = curriculum
         self.desired_goal[:], self.desired_goal_state[:], self.desired_goal_info[:] = self.curriculum.get_current_target(nb_goal=self.nenv)
 
-        self.recoder = DataRecorder(os.path.join(logger.get_dir(), "runner_data"))
-        self.wrong_recorder = DataRecorder(os.path.join(logger.get_dir(), "wrong_data"))
+        self.recoder = None
+        self.wrong_recorder = None
         self.episode_step = np.zeros(self.nenv, dtype=np.int32)
         self.reward_fn = reward_fn
         self.threshold = threshold
         self.include_death = False
 
+        self.log_episode_step = deque(maxlen=10)
+        self.log_episode_success = deque(maxlen=10)
+        self.log_episode_x_pos = deque(maxlen=10)
+        self.log_episode_y_pos = deque(maxlen=10)
+
     def run(self, acer_steps):
+        if self.recoder is None:
+            self.recoder = DataRecorder(os.path.join(logger.get_dir(), "runner_data"))
+        if self.wrong_recorder is None:
+            self.wrong_recorder = DataRecorder(os.path.join(logger.get_dir(), "wrong_data"))
         mb_obs, mb_next_obs, mb_actions, mb_rewards, mb_mus, mb_dones, mb_death = [], [], [], [], [], [], []
         mb_next_obs_infos, mb_desired_goal_infos = [], []
         mb_achieved_goal, mb_next_achieved_goal, mb_desired_goal, mb_desired_goal_state = [], [], [], []
-        episode_info = {}
 
         for step in range(self.nsteps):
-            actions, mus = self.model.step({'obs': self.obs.copy(), 'achieved_goal': self.achieved_goal.copy(),
-                'desired_goal': self.desired_goal.copy(), 'desired_goal_state': self.desired_goal_state.copy()})
+            actions, mus = self.model.step({
+                'obs': self.obs.copy(),
+                'achieved_goal': self.achieved_goal.copy(),
+                'desired_goal': self.desired_goal.copy(),
+                'desired_goal_state': self.desired_goal_state.copy()
+            })
             mb_obs.append(np.copy(self.obs))
             mb_achieved_goal.append(np.copy(self.achieved_goal))
             mb_desired_goal.append(np.copy(self.desired_goal))
@@ -136,7 +150,10 @@ class Runner:
                     logger.info(self.TEMPLATE.format(e, succ, self.desired_goal_info[e], final_pos, self.episode_step[e]))
 
                     # episode info
-                    episode_info.update({'succ': succ, 'length': self.episode_step[e], 'final_pos': final_pos})
+                    self.log_episode_step.append(self.episode_step[e])
+                    self.log_episode_success.append(1.0 if succ else 0.0)
+                    self.log_episode_x_pos.append(infos[e]['x_pos'])
+                    self.log_episode_y_pos.append(infos[e]['y_pos'])
                     self.episode_step[e] = 0
 
                     # reward and dones
@@ -159,10 +176,13 @@ class Runner:
                     # log info
                     final_pos = {"x_pos": infos[e]["x_pos"], "y_pos": infos[e]["y_pos"]}
                     self.recoder.store(dict(env=e, succ=False, length=self.episode_step[e], final_pos=final_pos))
-                    logger.info(self.TEMPLATE.format(e, 'fail', self.desired_goal_info[e], final_pos, self.episode_step[e]))
+                    logger.info(self.TEMPLATE.format(e, False, self.desired_goal_info[e], final_pos, self.episode_step[e]))
 
                     # episode info
-                    episode_info.update({'succ': False, 'length': self.episode_step[e], 'final_pos': final_pos})
+                    self.log_episode_step.append(self.episode_step[e])
+                    self.log_episode_success.append(0.0)
+                    self.log_episode_x_pos.append(infos[e]['x_pos'])
+                    self.log_episode_y_pos.append(infos[e]['y_pos'])
                     self.episode_step[e] = 0
 
                     # reward and death info
@@ -213,7 +233,6 @@ class Runner:
             deaths=mb_death,
             next_obs_infos=mb_next_obs_infos,
             desired_goal_infos=mb_desired_goal_infos,
-            episode_info=episode_info,
         )
         return results
 
@@ -228,3 +247,95 @@ class Runner:
             status = False
         return status
 
+    def evaluate(self):
+        tstart = time.time()
+        n_episode = 0
+        self.log_episode_step = deque(maxlen=10)
+        self.log_episode_success = deque(maxlen=10)
+        self.log_episode_x_pos = deque(maxlen=10)
+        self.log_episode_y_pos = deque(maxlen=10)
+        self.episode_step[:] = 0
+
+        if self.dict_obs:
+            dict_obs = self.env.reset()
+            self.obs[:] = dict_obs['observation']
+            achieved_goal = dict_obs["achieved_goal"]
+            self.achieved_goal[:] = np.tile(achieved_goal, [1, self.nb_tile])
+        else:
+            self.obs[:] = self.env.reset()
+
+        while n_episode < 10:
+            while True:
+                actions, mus = self.model.step({
+                    'obs': self.obs.copy(),
+                    'achieved_goal': self.achieved_goal.copy(),
+                    'desired_goal': self.desired_goal.copy(),
+                    'desired_goal_state': self.desired_goal_state.copy()
+                })
+                # step
+                if self.dict_obs:
+                    dict_obs, _, dones, infos = self.env.step(actions)
+                    obs, achieved_goal = dict_obs['observation'], dict_obs['achieved_goal']
+                    achieved_goal = np.tile(achieved_goal, [1, self.nb_tile])   # expand from 2-d to 256-d
+                else:
+                    obs, _, dones, infos = self.env.step(actions)
+                self.episode_step += 1
+                for e in range(self.nenv):
+                    if infos[e]['x_pos'] == 65535:
+                        infos[e]['x_pos'] = 0
+
+                # achieved & episode done
+                for e in range(self.nenv):
+                    reached = self.check_goal_reached_v2(infos[e], self.desired_goal_info[e])
+                    if reached or self.episode_step[e] > self.curriculum.allow_step or infos[e]["x_pos"] > self.desired_goal_info[e]["x_pos"] + 100:
+                        self.log_episode_step.append(self.episode_step[e])
+                        self.log_episode_success.append(1.0 if reached else 0.0)
+                        self.log_episode_x_pos.append(infos[e]['x_pos'])
+                        self.log_episode_y_pos.append(infos[e]['y_pos'])
+                        self.episode_step[e] = 0
+                        dones[e] = True
+                        n_episode += 1
+                        # reset
+                        if self.dict_obs:
+                            _dict_obs = self.env.reset_v2(e)
+                            obs[e], achieved_goal[e] = _dict_obs['observation'][0], np.tile(_dict_obs['achieved_goal'][0], self.nb_tile)
+                            assert np.array_equal(achieved_goal[e], np.tile(np.array([40., 176.]), self.nb_tile))
+                        else:
+                            _obs = self.env.reset_v2(e)[0]
+                            obs[e] = _obs
+                    elif dones[e]:
+                        # episode info
+                        self.log_episode_step.append(self.episode_step[e])
+                        self.log_episode_success.append(0.0)
+                        self.log_episode_x_pos.append(infos[e]['x_pos'])
+                        self.log_episode_y_pos.append(infos[e]['y_pos'])
+                        self.episode_step[e] = 0
+                        n_episode += 1
+                # states information for statefull models like LSTM
+                self.obs = obs
+                if self.dict_obs:
+                    self.achieved_goal = achieved_goal
+                if n_episode >= 10:
+                    break
+        logs = list()
+        logs.append(('test/final_x_pos', np.mean(self.log_episode_x_pos)))
+        logs.append(('test/final_y_pos', np.mean(self.log_episode_y_pos)))
+        logs.append(('test/success', np.mean(self.log_episode_success)))
+        logs.append(('test/episode_length', np.mean(self.log_episode_step)))
+        logs.append(('time/evaluate', time.time() - tstart))
+        return logs
+
+    def logs(self):
+        logs = list()
+        logs.append(('train/final_x_pos', self._safe_mean(self.log_episode_x_pos)))
+        logs.append(('train/final_y_pos', self._safe_mean(self.log_episode_y_pos)))
+        logs.append(('train/success', self._safe_mean(self.log_episode_success)))
+        logs.append(('train/episode_length', self._safe_mean(self.log_episode_step)))
+        return logs
+
+    @staticmethod
+    def _safe_mean(x):
+        if len(x) == 0:
+            return 0.
+        else:
+            return np.mean(x)

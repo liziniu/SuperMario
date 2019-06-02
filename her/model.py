@@ -290,11 +290,11 @@ class Model(object):
         self.save = functools.partial(save_variables, sess=self.sess, variables=params)
 
         self.initial_state = self.step_model.initial_state
-        with tf.variable_scope('stats'):
-            with tf.variable_scope('achieved_goal'):
-                self.ag_stats = Normalizer(size=self.achieved_goal_sh[0], sess=self.sess)
-            with tf.variable_scope('desired_goal'):
-                self.g_stats = Normalizer(size=self.desired_goal_sh[0], sess=self.sess)
+        # with tf.variable_scope('stats'):
+        #     with tf.variable_scope('achieved_goal'):
+        #         self.ag_stats = Normalizer(size=self.achieved_goal_sh[0], sess=self.sess)
+        #     with tf.variable_scope('desired_goal'):
+        #         self.g_stats = Normalizer(size=self.desired_goal_sh[0], sess=self.sess)
         if debug:
             tf.global_variables_initializer().run(session=self.sess)
             load_variables(load_path, self.params, self.sess)
@@ -317,20 +317,6 @@ class Model(object):
         else:
             names_ops_policy = self.names_ops_policy.copy()[:8]  # not including trust region
             values_ops_policy = self.sess.run(self.run_ops_policy, td_map)[1:][:8]
-        debug = False
-        if debug:
-            if np.random.uniform() < 0.25:
-                if 'achieved_goal' in self.policy_inputs:
-                    self.ag_stats.update(achieved_goal)
-                    self.ag_stats.recompute_stats()
-                    names_ops_policy += ['achieved_goal']
-                    values_ops_policy += [np.mean(self.sess.run(self.ag_stats.mean))]
-                if 'desired_goal' in self.policy_inputs:
-                    self.g_stats.update(desired_goal)
-                    self.g_stats.recompute_stats()
-                    names_ops_policy += ['desired_goal']
-                    values_ops_policy += [np.mean(self.sess.run(self.g_stats.mean))]
-
         return names_ops_policy, values_ops_policy
 
     def step(self, inputs):

@@ -22,7 +22,7 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
           log_interval=50, buffer_size=50000, replay_ratio=4, replay_start=1000, c=10.0, trust_region=True,
           alpha=0.99, delta=1, replay_k=4, load_path=None, env_eval=None, save_model=False, model_path=None,
           nb_train_epoch=4, desired_x_pos=500, debug=False, threshold=(10, 20),
-          reduced_step=5, strategy='single', policy_inputs=1, **network_kwargs):
+          reduced_step=5, strategy='single', policy_inputs=2, **network_kwargs):
 
     '''
     Main entrypoint for ACER (Actor-Critic with Experience Replay) algorithm (https://arxiv.org/pdf/1611.01224.pdf)
@@ -143,8 +143,11 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
     # we still need two runner to avoid one reset others' envs.
     goal_dim = model.achieved_goal_sh[0]
     curriculum = Curriculum(load_path=load_path, strategy=strategy, desired_x_pos=desired_x_pos, model=model)
-    runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, curriculum=curriculum,
-                    threshold=threshold)
+    train_runner = Runner(env=env, model=model, nsteps=nsteps, reward_fn=reward_fn, curriculum=curriculum,
+                          threshold=threshold)
+    evaluate_curriculum = Curriculum(load_path=load_path, strategy='single', desired_x_pos=desired_x_pos, model=model)
+    evaluator_runner = Runner(env=env_eval, model=model, nsteps=nsteps, reward_fn=reward_fn,
+                              curriculum=evaluate_curriculum,  threshold=threshold)
 
     if replay_ratio > 0:
         if her:
@@ -163,14 +166,14 @@ def learn(network, env, seed=None, nsteps=20, total_timesteps=int(80e6), q_coef=
                               keys=get_store_keys(), reward_fn=reward_fn, her=her)
     else:
         buffer = None
-    acer = Acer(runner, model, buffer, log_interval,)
+    acer = Acer(train_runner, evaluator_runner,  model, buffer, log_interval,)
     acer.tstart = time.time()
 
     replay_start = replay_start * nenvs
     onpolicy_cnt = 0
     if debug:
         while True:
-            runner.run(0)
+            train_runner.run(0)
     while acer.steps < total_timesteps:
         acer.call(replay_start=replay_start, nb_train_epoch=nb_train_epoch)
         acer.steps += nenvs * nsteps
