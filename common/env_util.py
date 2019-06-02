@@ -150,6 +150,10 @@ def make_atari(env_id, max_episode_steps=None):
         from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
         env = gym_super_mario_bros.make(env_id)
         env = BinarySpaceToDiscreteSpaceEnv(env, SIMPLE_MOVEMENT)
+        # todo: investigate the reason
+        # This is an ad-hot method to solve observation is edified by wrappers.
+        env.observation_space.spaces['observation'] = gym.spaces.Box(
+            low=0,  high=255, shape=(240, 256, 3), dtype=np.uint8)
     else:
         env = gym.make(env_id)
         assert 'NoFrameskip' in env.spec.id
